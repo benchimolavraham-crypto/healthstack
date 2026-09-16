@@ -7,6 +7,8 @@ const eslintConfig = defineConfig([
   ...nextTs,
   // Override default ignores of eslint-config-next.
   globalIgnores([
+    // Standalone Scriptable iOS widget, not part of the Next.js app.
+    "scriptable/**",
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",

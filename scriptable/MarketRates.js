@@ -1,0 +1,510 @@
+// ===========================================================================
+//  MARKET RATES — Scriptable medium widget
+//  5Y / 7Y / 10Y Treasury + SOFR, for commercial real estate.
+//
+//  SETUP: none required. No API key needed — it reads FRED's public CSV
+//  download endpoint. If you ever want to use the official keyed FRED API
+//  instead, paste your key into FRED_API_KEY below (free key from
+//  https://fredaccount.stlouisfed.org/apikey). Leaving it blank is fine.
+// ===========================================================================
+
+const CONFIG = {
+  // Optional. Leave "" to use the no-key FRED CSV endpoint.
+  FRED_API_KEY: "",
+
+  // Show the day-over-day move in basis points next to each rate.
+  SHOW_CHANGE: true,
+
+  // true  = rising rates shown in red (a borrower's view)
+  // false = rising rates shown in green (a trader's view)
+  UP_IS_BAD: true,
+
+  // Where tapping the widget takes you.
+  TAP_URL: "https://fred.stlouisfed.org/graph/?id=DGS5,DGS7,DGS10,SOFR",
+
+  // How often iOS is asked to refresh. iOS treats this as a hint.
+  REFRESH_MINUTES: 30,
+
+  CACHE_FILE: "market-rates-cache.json",
+  TIMEOUT_SECONDS: 15,
+};
+
+const SERIES = [
+  { id: "DGS5", label: "5Y UST" },
+  { id: "DGS7", label: "7Y UST" },
+  { id: "DGS10", label: "10Y UST" },
+  { id: "SOFR", label: "SOFR" },
+];
+
+const TREASURY_IDS = ["DGS5", "DGS7", "DGS10"];
+
+const COLORS = {
+  text: Color.dynamic(new Color("#0B0B0F"), new Color("#F2F2F5")),
+  dim: Color.dynamic(new Color("#6B7280"), new Color("#8A8F9A")),
+  faint: Color.dynamic(new Color("#9AA0AA"), new Color("#6E727B")),
+  good: Color.dynamic(new Color("#1B8A4B"), new Color("#4ADE80")),
+  bad: Color.dynamic(new Color("#C0392B"), new Color("#F87171")),
+  warn: Color.dynamic(new Color("#B45309"), new Color("#FBBF24")),
+};
+
+// ---------------------------------------------------------------------------
+// Small helpers
+// ---------------------------------------------------------------------------
+
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+// Parses a numeric cell. FRED writes "." for holidays/missing days.
+function num(raw) {
+  if (raw === null || raw === undefined) return null;
+  const t = String(raw).trim().replace(/^"|"$/g, "");
+  if (t === "" || t === "." || t === "ND" || t === "N/A" || t === "NA") return null;
+  const v = Number(t);
+  return Number.isFinite(v) ? v : null;
+}
+
+// Builds a local-time Date. Never use new Date("2026-09-15") directly — that
+// is parsed as UTC midnight and displays as the previous day in US timezones.
+function parseDateLoose(raw) {
+  if (!raw) return null;
+  const t = String(raw).trim().replace(/^"|"$/g, "");
+  let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+  const d = new Date(t);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseCsvLine(line) {
+  const out = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out.map((s) => s.trim());
+}
+
+function csvRows(text) {
+  const lines = String(text)
+    .trim()
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "");
+  if (lines.length < 2) throw new Error("CSV had no data rows");
+  return { header: parseCsvLine(lines[0]), rows: lines.slice(1).map(parseCsvLine) };
+}
+
+// Takes observations in any order, returns the latest valid one plus the one
+// before it — that pairing is what gives us "latest available" behaviour over
+// weekends and holidays, and the basis-point change.
+function toRate(points) {
+  const pts = points
+    .filter((p) => p && p.date && p.value !== null && p.value !== undefined)
+    .sort((a, b) => a.date - b.date);
+  if (!pts.length) return null;
+  const last = pts[pts.length - 1];
+  const prev = pts.length > 1 ? pts[pts.length - 2] : null;
+  return { value: last.value, date: last.date.getTime(), prev: prev ? prev.value : null };
+}
+
+async function getString(url) {
+  const req = new Request(url);
+  req.timeoutInterval = CONFIG.TIMEOUT_SECONDS;
+  req.headers = { "User-Agent": "Scriptable Market Rates Widget" };
+  return await req.loadString();
+}
+
+async function getJson(url) {
+  const req = new Request(url);
+  req.timeoutInterval = CONFIG.TIMEOUT_SECONDS;
+  req.headers = { Accept: "application/json", "User-Agent": "Scriptable Market Rates Widget" };
+  return await req.loadJSON();
+}
+
+// ---------------------------------------------------------------------------
+// Data sources, in order of preference
+// ---------------------------------------------------------------------------
+
+// 1a. Official FRED API. Only used when a key is pasted above.
+async function fetchFredApi(key) {
+  const entries = await Promise.all(
+    SERIES.map(async (s) => {
+      const url =
+        "https://api.stlouisfed.org/fred/series/observations" +
+        `?series_id=${s.id}&api_key=${encodeURIComponent(key)}` +
+        "&file_type=json&sort_order=desc&limit=20";
+      try {
+        const json = await getJson(url);
+        const pts = (json.observations || []).map((o) => ({
+          value: num(o.value),
+          date: parseDateLoose(o.date),
+        }));
+        return [s.id, toRate(pts)];
+      } catch (e) {
+        return [s.id, null];
+      }
+    })
+  );
+  return Object.fromEntries(entries.filter(([, r]) => r));
+}
+
+// 1b. FRED's public CSV download — all four series, one request, no key.
+async function fetchFredCsv() {
+  const start = new Date();
+  start.setDate(start.getDate() - 75);
+  const cosd = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
+  const url =
+    "https://fred.stlouisfed.org/graph/fredgraph.csv" +
+    `?id=${SERIES.map((s) => s.id).join(",")}&cosd=${cosd}`;
+
+  const { header, rows } = csvRows(await getString(url));
+  const upper = header.map((h) => h.toUpperCase());
+  const out = {};
+  for (const s of SERIES) {
+    const col = upper.indexOf(s.id);
+    if (col < 0) continue;
+    const rate = toRate(
+      rows.map((r) => ({ value: num(r[col]), date: parseDateLoose(r[0]) }))
+    );
+    if (rate) out[s.id] = rate;
+  }
+  return out;
+}
+
+// 2. Treasury's own daily yield curve, as a backstop for 5Y/7Y/10Y.
+async function fetchTreasury() {
+  const wanted = { "5 YR": "DGS5", "7 YR": "DGS7", "10 YR": "DGS10" };
+  const thisYear = new Date().getFullYear();
+  // Early in January the current year's file can still be empty.
+  for (const year of [thisYear, thisYear - 1]) {
+    try {
+      const url =
+        "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/" +
+        `daily-treasury-rates.csv/${year}/all` +
+        `?type=daily_treasury_yield_curve&field_tdr_date_value=${year}&page&_format=csv`;
+      const { header, rows } = csvRows(await getString(url));
+      const upper = header.map((h) => h.toUpperCase().replace(/\s+/g, " ").trim());
+      const out = {};
+      for (const [colName, id] of Object.entries(wanted)) {
+        const col = upper.indexOf(colName);
+        if (col < 0) continue;
+        const rate = toRate(
+          rows.map((r) => ({ value: num(r[col]), date: parseDateLoose(r[0]) }))
+        );
+        if (rate) out[id] = rate;
+      }
+      if (Object.keys(out).length) return out;
+    } catch (e) {
+      // try the previous year, then give up on this source
+    }
+  }
+  return {};
+}
+
+// 3. The New York Fed publishes SOFR itself — backstop for the SOFR tile.
+async function fetchSofrNyFed() {
+  const json = await getJson("https://markets.newyorkfed.org/api/rates/secured/sofr/last/5.json");
+  const pts = (json.refRates || [])
+    .filter((r) => String(r.type || "").toUpperCase() === "SOFR")
+    .map((r) => ({ value: num(r.percentRate), date: parseDateLoose(r.effectiveDate) }));
+  return toRate(pts);
+}
+
+async function loadRates() {
+  const rates = {};
+  const sources = [];
+  const errors = [];
+
+  const merge = (obj, source) => {
+    let used = false;
+    for (const [id, rate] of Object.entries(obj || {})) {
+      if (rate && !rates[id]) {
+        rates[id] = rate;
+        used = true;
+      }
+    }
+    if (used && !sources.includes(source)) sources.push(source);
+  };
+  const missing = () => SERIES.some((s) => !rates[s.id]);
+
+  const key = String(CONFIG.FRED_API_KEY || "").trim();
+  if (key) {
+    try {
+      merge(await fetchFredApi(key), "FRED");
+    } catch (e) {
+      errors.push(`FRED API: ${e.message}`);
+    }
+  }
+  if (missing()) {
+    try {
+      merge(await fetchFredCsv(), "FRED");
+    } catch (e) {
+      errors.push(`FRED CSV: ${e.message}`);
+    }
+  }
+  if (TREASURY_IDS.some((id) => !rates[id])) {
+    try {
+      merge(await fetchTreasury(), "U.S. Treasury");
+    } catch (e) {
+      errors.push(`Treasury: ${e.message}`);
+    }
+  }
+  if (!rates.SOFR) {
+    try {
+      const sofr = await fetchSofrNyFed();
+      if (sofr) merge({ SOFR: sofr }, "NY Fed");
+    } catch (e) {
+      errors.push(`NY Fed: ${e.message}`);
+    }
+  }
+
+  return { rates, sources, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Cache — so the widget still shows real numbers with no signal
+// ---------------------------------------------------------------------------
+
+function cachePath() {
+  const fm = FileManager.local();
+  return fm.joinPath(fm.documentsDirectory(), CONFIG.CACHE_FILE);
+}
+
+function readCache() {
+  try {
+    const fm = FileManager.local();
+    const path = cachePath();
+    if (!fm.fileExists(path)) return null;
+    const parsed = JSON.parse(fm.readString(path));
+    return parsed && parsed.rates ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeCache(payload) {
+  try {
+    FileManager.local().writeString(cachePath(), JSON.stringify(payload));
+  } catch (e) {
+    // a cache write failure is never worth failing the widget over
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Widget
+// ---------------------------------------------------------------------------
+
+function metrics(family) {
+  if (family === "small") {
+    return { padT: 12, padX: 12, padB: 10, header: 9, label: 8, value: 16.5, delta: 7.5, rowGap: 8, headGap: 7, footer: 7.5 };
+  }
+  if (family === "large") {
+    return { padT: 18, padX: 18, padB: 16, header: 12, label: 11, value: 30, delta: 11, rowGap: 22, headGap: 14, footer: 10.5 };
+  }
+  return { padT: 13, padX: 15, padB: 11, header: 10.5, label: 9.5, value: 25, delta: 9.5, rowGap: 11, headGap: 9, footer: 9 };
+}
+
+function formatDay(ts) {
+  const df = new DateFormatter();
+  df.dateFormat = "MMM d";
+  return df.string(new Date(ts));
+}
+
+function formatClock(date) {
+  const df = new DateFormatter();
+  df.useNoDateStyle();
+  df.useShortTimeStyle();
+  return df.string(date);
+}
+
+function changeColor(bp) {
+  if (bp === 0) return COLORS.faint;
+  const rising = bp > 0;
+  const isBad = CONFIG.UP_IS_BAD ? rising : !rising;
+  return isBad ? COLORS.bad : COLORS.good;
+}
+
+function addTile(column, series, rate, M) {
+  const cell = column.addStack();
+  cell.layoutVertically();
+  cell.spacing = 1;
+
+  const label = cell.addText(series.label.toUpperCase());
+  label.font = Font.semiboldSystemFont(M.label);
+  label.textColor = COLORS.dim;
+  label.lineLimit = 1;
+
+  const row = cell.addStack();
+  row.layoutHorizontally();
+  row.bottomAlignContent();
+  row.spacing = 4;
+
+  const value = row.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
+  value.font = Font.mediumRoundedSystemFont(M.value);
+  value.textColor = COLORS.text;
+  value.lineLimit = 1;
+  value.minimumScaleFactor = 0.7;
+
+  if (CONFIG.SHOW_CHANGE && rate && rate.prev !== null && rate.prev !== undefined) {
+    const bp = Math.round((rate.value - rate.prev) * 100);
+    const delta = row.addText(bp === 0 ? "flat" : `${bp > 0 ? "+" : "−"}${Math.abs(bp)} bp`);
+    delta.font = Font.mediumSystemFont(M.delta);
+    delta.textColor = changeColor(bp);
+    delta.lineLimit = 1;
+  }
+}
+
+// "Data as of Sep 15" when everything shares a date, otherwise it names both —
+// SOFR is published a business day behind the Treasury curve.
+function footerLeft(rates) {
+  const ust = TREASURY_IDS.map((id) => rates[id]).filter(Boolean).map((r) => r.date);
+  const sofr = rates.SOFR ? rates.SOFR.date : null;
+  const ustDay = ust.length ? Math.max(...ust) : null;
+  if (ustDay && sofr && formatDay(ustDay) !== formatDay(sofr)) {
+    return `UST ${formatDay(ustDay)} · SOFR ${formatDay(sofr)}`;
+  }
+  const any = ustDay || sofr;
+  return any ? `Data as of ${formatDay(any)}` : "No data available";
+}
+
+function buildWidget(rates, meta) {
+  const family = config.widgetFamily || "medium";
+  const M = metrics(family);
+
+  const widget = new ListWidget();
+  widget.url = CONFIG.TAP_URL;
+  widget.setPadding(M.padT, M.padX, M.padB, M.padX);
+  widget.backgroundGradient = (() => {
+    const g = new LinearGradient();
+    g.locations = [0, 1];
+    g.colors = [
+      Color.dynamic(new Color("#FFFFFF"), new Color("#15161A")),
+      Color.dynamic(new Color("#F1F3F7"), new Color("#0C0D10")),
+    ];
+    g.startPoint = new Point(0, 0);
+    g.endPoint = new Point(0, 1);
+    return g;
+  })();
+
+  // Header
+  const head = widget.addStack();
+  head.layoutHorizontally();
+  head.centerAlignContent();
+  const title = head.addText("MARKET RATES");
+  title.font = Font.semiboldSystemFont(M.header);
+  title.textColor = COLORS.dim;
+  title.lineLimit = 1;
+  head.addSpacer();
+  const tagText = meta.stale ? "CACHED" : meta.sources.join(" · ");
+  if (tagText) {
+    const tag = head.addText(tagText);
+    tag.font = Font.mediumSystemFont(M.header - 0.5);
+    tag.textColor = meta.stale ? COLORS.warn : COLORS.faint;
+    tag.lineLimit = 1;
+  }
+
+  widget.addSpacer(M.headGap);
+
+  // 2x2 grid, built as two columns so the two tiles in each row line up.
+  const grid = widget.addStack();
+  grid.layoutHorizontally();
+
+  const left = grid.addStack();
+  left.layoutVertically();
+  addTile(left, SERIES[0], rates[SERIES[0].id], M);
+  left.addSpacer(M.rowGap);
+  addTile(left, SERIES[2], rates[SERIES[2].id], M);
+
+  grid.addSpacer();
+
+  const right = grid.addStack();
+  right.layoutVertically();
+  addTile(right, SERIES[1], rates[SERIES[1].id], M);
+  right.addSpacer(M.rowGap);
+  addTile(right, SERIES[3], rates[SERIES[3].id], M);
+
+  widget.addSpacer();
+
+  // Footer
+  const foot = widget.addStack();
+  foot.layoutHorizontally();
+  foot.centerAlignContent();
+  const asOf = foot.addText(footerLeft(rates));
+  asOf.font = Font.systemFont(M.footer);
+  asOf.textColor = COLORS.faint;
+  asOf.lineLimit = 1;
+  asOf.minimumScaleFactor = 0.8;
+  foot.addSpacer();
+  if (family !== "small") {
+    const stamp = foot.addText(`↻ ${formatClock(meta.refreshedAt)}`);
+    stamp.font = Font.systemFont(M.footer);
+    stamp.textColor = COLORS.faint;
+    stamp.lineLimit = 1;
+  }
+
+  widget.refreshAfterDate = new Date(Date.now() + CONFIG.REFRESH_MINUTES * 60 * 1000);
+  return widget;
+}
+
+// ---------------------------------------------------------------------------
+// Run
+// ---------------------------------------------------------------------------
+
+const { rates, sources, errors } = await loadRates();
+const freshCount = Object.keys(rates).length;
+const cached = readCache();
+
+const meta = { sources, stale: false, refreshedAt: new Date() };
+
+// Anything a source could not supply falls back to the last good value, so a
+// weak signal degrades to slightly old numbers instead of blank tiles.
+if (cached && freshCount < SERIES.length) {
+  for (const s of SERIES) {
+    if (!rates[s.id] && cached.rates[s.id]) {
+      rates[s.id] = cached.rates[s.id];
+      meta.stale = true;
+    }
+  }
+}
+if (freshCount > 0) writeCache({ savedAt: Date.now(), rates, sources });
+// With nothing fetched at all, the honest timestamp is when the cache was written.
+if (freshCount === 0 && cached) meta.refreshedAt = new Date(cached.savedAt);
+
+const widget = buildWidget(rates, meta);
+
+if (config.runsInWidget) {
+  Script.setWidget(widget);
+} else {
+  if (errors.length) console.log(`Sources that failed:\n${errors.join("\n")}`);
+  console.log(
+    SERIES.map((s) => {
+      const r = rates[s.id];
+      return r ? `${s.label}: ${r.value.toFixed(2)}%  (${formatDay(r.date)})` : `${s.label}: no data`;
+    }).join("\n")
+  );
+  await widget.presentMedium();
+}
+
+Script.complete();
