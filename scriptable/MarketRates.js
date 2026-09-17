@@ -20,6 +20,13 @@ const CONFIG = {
   // "pct" — the same move as percentage points, e.g. 0.01%
   CHANGE_UNIT: "bp",
 
+  // What the move is measured against. The widget labels whichever you pick,
+  // so the number is never ambiguous.
+  //   "1d" — the previous business day. What moved since you last looked.
+  //   "1w" — seven days back.
+  //   "1m" — thirty days back. Whether a quote you issued still holds.
+  CHANGE_PERIOD: "1d",
+
   // true  = rising rates shown in red (a borrower's view)
   // false = rising rates shown in green (a trader's view)
   UP_IS_BAD: true,
@@ -66,6 +73,35 @@ const COLORS = {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+// How far back the chosen comparison reaches.
+function periodDays() {
+  const p = String(CONFIG.CHANGE_PERIOD || "1d").toLowerCase();
+  if (p === "1m") return 30;
+  if (p === "1w") return 7;
+  return 1;
+}
+
+function periodLabel() {
+  const p = String(CONFIG.CHANGE_PERIOD || "1d").toLowerCase();
+  return p === "1m" ? "1M" : p === "1w" ? "1W" : "1D";
+}
+
+// Observations to keep per series: enough business days to reach back over the
+// period, plus room for holidays. Small enough that the whole history still
+// costs a widget nothing.
+function pointsWanted() {
+  const days = periodDays();
+  if (days >= 30) return 26;
+  if (days >= 7) return 9;
+  return 3;
+}
+
+// Calendar days of history to ask a source for.
+function historyDays() {
+  const days = periodDays();
+  return days >= 30 ? 55 : days >= 7 ? 25 : 20;
+}
 
 function timeoutSeconds() {
   return config.runsInWidget ? CONFIG.WIDGET_TIMEOUT_SECONDS : CONFIG.TIMEOUT_SECONDS;
@@ -136,17 +172,50 @@ function csvRows(text) {
   return { header: parseCsvLine(lines[0]), rows: lines.slice(1).map(parseCsvLine) };
 }
 
-// Takes observations in any order, returns the latest valid one plus the one
-// before it — that pairing is what gives us "latest available" behaviour over
-// weekends and holidays, and the basis-point change.
+// Takes observations in any order and keeps the newest run of them. Using the
+// latest valid one is what gives "latest available" behaviour over weekends and
+// holidays; the trailing history is what the comparison period is measured
+// against. Points are stored as [timestamp, value] to keep the cache small.
 function toRate(points) {
   const pts = points
     .filter((p) => p && p.date && p.value !== null && p.value !== undefined)
-    .sort((a, b) => a.date - b.date);
+    .sort((a, b) => a.date - b.date)
+    .slice(-pointsWanted());
   if (!pts.length) return null;
   const last = pts[pts.length - 1];
   const prev = pts.length > 1 ? pts[pts.length - 2] : null;
-  return { value: last.value, date: last.date.getTime(), prev: prev ? prev.value : null };
+  return {
+    value: last.value,
+    date: last.date.getTime(),
+    prev: prev ? prev.value : null,
+    points: pts.map((p) => [p.date.getTime(), p.value]),
+  };
+}
+
+// What this rate is compared against, and the period that comparison actually
+// covers. For a single day that is the previous observation; for longer periods
+// it is the last observation on or before the target date.
+function changeBasis(rate) {
+  const requested = periodLabel();
+  if (!rate) return { ref: null, label: requested };
+  const prev = rate.prev === undefined ? null : rate.prev;
+  const points = Array.isArray(rate.points) ? rate.points : null;
+
+  if (periodDays() <= 1) return { ref: prev, label: requested };
+  if (!points) {
+    // A cache written before histories were kept holds only the previous day.
+    // Label it for the period it covers, not the one that was asked for.
+    return { ref: prev, label: "1D" };
+  }
+
+  const older = points.filter((pt) => pt[0] < rate.date);
+  if (!older.length) return { ref: null, label: requested };
+  const target = rate.date - periodDays() * 24 * 60 * 60 * 1000;
+  const reached = older.filter((pt) => pt[0] <= target);
+  return {
+    ref: reached.length ? reached[reached.length - 1][1] : older[0][1],
+    label: requested,
+  };
 }
 
 async function getString(url) {
@@ -174,7 +243,7 @@ async function fetchFredApi(key) {
       const url =
         "https://api.stlouisfed.org/fred/series/observations" +
         `?series_id=${s.id}&api_key=${encodeURIComponent(key)}` +
-        "&file_type=json&sort_order=desc&limit=20";
+        `&file_type=json&sort_order=desc&limit=${pointsWanted() + 10}`;
       try {
         const json = await getJson(url);
         const pts = (json.observations || []).map((o) => ({
@@ -193,7 +262,7 @@ async function fetchFredApi(key) {
 // 1b. FRED's public CSV download — all four series, one request, no key.
 async function fetchFredCsv() {
   const start = new Date();
-  start.setDate(start.getDate() - 20);
+  start.setDate(start.getDate() - historyDays());
   const cosd = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
   const url =
     "https://fred.stlouisfed.org/graph/fredgraph.csv" +
@@ -210,19 +279,19 @@ async function fetchFredCsv() {
   }
   const ids = Object.keys(cols);
 
-  // Read newest-first and stop as soon as every series has the two
+  // Read newest-first and stop as soon as every series has the handful of
   // observations it needs. If FRED ignores the start date it answers with
   // decades of history, which a widget does not have the memory to walk.
   const found = {};
   for (const id of ids) found[id] = [];
   for (let i = lines.length - 1; i > 0; i--) {
-    if (ids.every((id) => found[id].length >= 2)) break;
+    if (ids.every((id) => found[id].length >= pointsWanted())) break;
     if (!lines[i].trim()) continue;
     const cells = parseCsvLine(lines[i]);
     const date = parseDateLoose(cells[0]);
     if (!date) continue;
     for (const id of ids) {
-      if (found[id].length >= 2) continue;
+      if (found[id].length >= pointsWanted()) continue;
       const value = num(cells[cols[id]]);
       if (value !== null) found[id].push({ value, date });
     }
@@ -268,7 +337,7 @@ async function fetchTreasury() {
 
 // 3. The New York Fed publishes SOFR itself — backstop for the SOFR tile.
 async function fetchSofrNyFed() {
-  const json = await getJson("https://markets.newyorkfed.org/api/rates/secured/sofr/last/5.json");
+  const json = await getJson(`https://markets.newyorkfed.org/api/rates/secured/sofr/last/${pointsWanted() + 5}.json`);
   const pts = (json.refRates || [])
     .filter((r) => String(r.type || "").toUpperCase() === "SOFR")
     .map((r) => ({ value: num(r.percentRate), date: parseDateLoose(r.effectiveDate) }));
@@ -434,11 +503,6 @@ function formatClock(date) {
   return df.string(date);
 }
 
-function basisPoints(rate) {
-  if (!rate || rate.prev === null || rate.prev === undefined) return null;
-  return Math.round((rate.value - rate.prev) * 100);
-}
-
 // Rising rates cost a borrower money, so up is the red one by default.
 function changeColor(bp) {
   if (bp === null || bp === 0) return COLORS.faint;
@@ -447,16 +511,17 @@ function changeColor(bp) {
 }
 
 // The arrow carries the direction as well as the colour, so the move still
-// reads on a black-and-white screen or to a red-green colourblind eye.
-function changeLabel(rate) {
-  const bp = basisPoints(rate);
+// reads on a black-and-white screen or to a red-green colourblind eye. The
+// period is spelled out on every row: the move means nothing without it.
+function moveText(rate, bp, label) {
   if (bp === null) return " "; // keeps every row the same height
-  if (bp === 0) return "flat";
+  if (bp === 0) return `flat · ${label}`;
   const arrow = bp > 0 ? "▲" : "▼";
   if (CONFIG.CHANGE_UNIT === "pct") {
-    return `${arrow} ${Math.abs(rate.value - rate.prev).toFixed(2)}%`;
+    const basis = changeBasis(rate);
+    return `${arrow} ${Math.abs(rate.value - basis.ref).toFixed(2)}% · ${label}`;
   }
-  return `${arrow} ${Math.abs(bp)} bp`;
+  return `${arrow} ${Math.abs(bp)} bp · ${label}`;
 }
 
 // The newest observation date across the four rates — the widget's "as of".
@@ -501,9 +566,11 @@ function addRow(widget, series, rate, M, headline) {
   value.rightAlignText();
 
   if (CONFIG.SHOW_CHANGE) {
-    const move = figures.addText(changeLabel(rate));
+    const basis = changeBasis(rate);
+    const bp = rate && basis.ref !== null ? Math.round((rate.value - basis.ref) * 100) : null;
+    const move = figures.addText(moveText(rate, bp, basis.label));
     move.font = Font.mediumSystemFont(M.change);
-    move.textColor = changeColor(basisPoints(rate));
+    move.textColor = changeColor(bp);
     move.lineLimit = 1;
     move.rightAlignText();
   }
@@ -550,8 +617,8 @@ function buildWidget(rates, meta) {
   asOf.lineLimit = 1;
   asOf.minimumScaleFactor = 0.7;
   head.addSpacer();
-  // No glyph: the schedule does the refreshing, and this says it is running.
-  const checked = head.addText(formatClock(meta.refreshedAt));
+  // Labelled, so it cannot be mistaken for the clock in the status bar.
+  const checked = head.addText(`Updated ${formatClock(meta.refreshedAt)}`);
   checked.font = Font.regularSystemFont(M.change);
   checked.textColor = COLORS.faint;
   checked.lineLimit = 1;

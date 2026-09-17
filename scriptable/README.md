@@ -5,15 +5,15 @@ small (2x2) Home Screen widget — each rate in white, with the day's move
 stacked underneath it in red when it rose and green when it fell.
 
 ```
-Sep 15         7:46 AM
+Sep 15  Updated 7:46 AM
 5-Year           4.83%
-                ▼ 12 bp
+           ▼ 12 bp · 1D
 7-Year           4.91%
-                 ▲ 3 bp
+            ▲ 3 bp · 1D
 10-Year          4.72%
-                ▲ 12 bp
+           ▲ 12 bp · 1D
 SOFR Sep 12      3.64%
-                   flat
+             flat · 1D
 ```
 
 Rising rates are the red ones: the default is a borrower's view, where a higher
@@ -21,18 +21,19 @@ rate costs money. Flip `UP_IS_BAD` to `false` for the opposite. The arrow
 carries the direction too, so the move still reads without the colour.
 
 The top row is the date the figures are from, and the time of the last
-successful check. A rate shows its own date next to its name only when it is
+successful check. Every move is tagged with the period it covers, so a number
+on its own can never be read against the wrong window. A rate shows its own date next to its name only when it is
 older than that — SOFR is published the following business morning, so it is
 often a day behind the Treasury curve.
 
 Medium and large sizes use the same layout with the full labels:
 
 ```
-MARKET RATES                  Sep 15 7:46 AM
+MARKET RATES          Sep 15 Updated 7:46 AM
 Treasury 5-Year                        4.83%
-                                      ▼ 12 bp
+                                ▼ 12 bp · 1D
 Treasury 7-Year                        4.91%
-                                       ▲ 3 bp
+                                 ▲ 3 bp · 1D
 ```
 
 The script detects which size you added and lays itself out accordingly.
@@ -52,6 +53,27 @@ The script detects which size you added and lays itself out accordingly.
    refresh the rates.
 
 No API key is required.
+
+## Which comparison period
+
+`CHANGE_PERIOD` decides what each move is measured against:
+
+| Setting | Measures against | What it answers |
+| --- | --- | --- |
+| `"1d"` | the previous business day | what moved since you last looked |
+| `"1w"` | seven days back | the direction of the week, past the daily noise |
+| `"1m"` | thirty days back | whether a quote issued a month ago still holds |
+
+`"1d"` is the default because it is the only one that changes between glances,
+and it is how a rate move is quoted out loud. Treasury yields move a couple of
+basis points on an ordinary day, so a single day is mostly noise; `"1m"` is the
+one that carries a decision, since thirty days is about the life of a term
+sheet and 25-50bp over that window is what forces a re-quote.
+
+Whichever you pick, the widget keeps enough history to measure it and labels
+every row with the period it used. If it is ever working from a saved copy that
+predates that history, it reports the period it actually had rather than the one
+you asked for.
 
 ## Refreshing
 
@@ -126,6 +148,7 @@ All at the top of `MarketRates.js`:
 - `SHOW_CHANGE` — set to `false` to hide the move entirely.
 - `CHANGE_UNIT` — `"bp"` shows `▲ 12 bp`, the usual way a rate move is quoted;
   `"pct"` shows the same move as `▲ 0.12%`.
+- `CHANGE_PERIOD` — `"1d"`, `"1w"` or `"1m"` (see above).
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
 
 ## If the widget is blank
