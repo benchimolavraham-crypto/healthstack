@@ -13,8 +13,12 @@ const CONFIG = {
   // Optional. Leave "" to use the no-key FRED CSV endpoint.
   FRED_API_KEY: "",
 
-  // Show the day-over-day move in basis points next to each rate.
+  // Show the day-over-day move under each rate.
   SHOW_CHANGE: true,
+
+  // "bp"  — the move in basis points, how rate moves are normally quoted
+  // "pct" — the same move as percentage points, e.g. 0.01%
+  CHANGE_UNIT: "bp",
 
   // true  = rising rates shown in red (a borrower's view)
   // false = rising rates shown in green (a trader's view)
@@ -51,7 +55,7 @@ const SERIES = [
 const TREASURY_IDS = ["DGS5", "DGS7", "DGS10"];
 
 const COLORS = {
-  text: Color.dynamic(new Color("#0B0B0F"), new Color("#F2F2F5")),
+  text: Color.dynamic(new Color("#000000"), new Color("#FFFFFF")),
   dim: Color.dynamic(new Color("#6B7280"), new Color("#8A8F9A")),
   faint: Color.dynamic(new Color("#9AA0AA"), new Color("#6E727B")),
   good: Color.dynamic(new Color("#1B8A4B"), new Color("#4ADE80")),
@@ -406,14 +410,15 @@ function writeCache(payload) {
 // ---------------------------------------------------------------------------
 
 function metrics(family) {
+  // Every size has the same height to work with — only the width changes — so
+  // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    // No room for a header, full names, or the bp change at this size.
-    return { padT: 12, padX: 13, padB: 12, header: 0, label: 12, value: 17, delta: 0, meta: 8.5, compact: true };
+    return { padT: 8, padX: 11, padB: 8, header: 0, date: 11.5, label: 11, value: 16, change: 8.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 18, padX: 20, padB: 18, header: 12, label: 17, value: 24, delta: 12, meta: 11 };
+    return { padT: 16, padX: 18, padB: 16, header: 12, date: 12, label: 15, value: 22, change: 11 };
   }
-  return { padT: 12, padX: 14, padB: 12, header: 10.5, label: 13, value: 17.5, delta: 9.5, meta: 9 };
+  return { padT: 8, padX: 14, padB: 8, header: 10.5, date: 10.5, label: 13, value: 18, change: 9 };
 }
 
 function formatDay(ts) {
@@ -429,11 +434,29 @@ function formatClock(date) {
   return df.string(date);
 }
 
+function basisPoints(rate) {
+  if (!rate || rate.prev === null || rate.prev === undefined) return null;
+  return Math.round((rate.value - rate.prev) * 100);
+}
+
+// Rising rates cost a borrower money, so up is the red one by default.
 function changeColor(bp) {
-  if (bp === 0) return COLORS.faint;
-  const rising = bp > 0;
-  const isBad = CONFIG.UP_IS_BAD ? rising : !rising;
+  if (bp === null || bp === 0) return COLORS.faint;
+  const isBad = CONFIG.UP_IS_BAD ? bp > 0 : bp < 0;
   return isBad ? COLORS.bad : COLORS.good;
+}
+
+// The arrow carries the direction as well as the colour, so the move still
+// reads on a black-and-white screen or to a red-green colourblind eye.
+function changeLabel(rate) {
+  const bp = basisPoints(rate);
+  if (bp === null) return " "; // keeps every row the same height
+  if (bp === 0) return "flat";
+  const arrow = bp > 0 ? "▲" : "▼";
+  if (CONFIG.CHANGE_UNIT === "pct") {
+    return `${arrow} ${Math.abs(rate.value - rate.prev).toFixed(2)}%`;
+  }
+  return `${arrow} ${Math.abs(bp)} bp`;
 }
 
 // The newest observation date across the four rates — the widget's "as of".
@@ -442,10 +465,10 @@ function headlineDate(rates) {
   return days.length ? Math.max(...days) : null;
 }
 
-// One rate per line: name on the left, percentage on the right. The change sits
-// left of the percentage so every percentage lands on the same right edge.
-// A rate older than the headline date carries its own date, right beside it —
-// SOFR is an overnight rate, so it is often a business day behind the curve.
+// One rate per line: the name on the left, and on the right the rate with the
+// day's move stacked underneath it. A rate older than the headline date carries
+// its own date next to the name — SOFR is an overnight rate, so it is often a
+// business day behind the curve.
 function addRow(widget, series, rate, M, headline) {
   const row = widget.addStack();
   row.layoutHorizontally();
@@ -460,26 +483,30 @@ function addRow(widget, series, rate, M, headline) {
   if (rate && headline && formatDay(rate.date) !== formatDay(headline)) {
     row.addSpacer(4);
     const own = row.addText(formatDay(rate.date));
-    own.font = Font.regularSystemFont(M.meta);
+    own.font = Font.regularSystemFont(M.change);
     own.textColor = COLORS.faint;
     own.lineLimit = 1;
   }
 
   row.addSpacer();
 
-  if (CONFIG.SHOW_CHANGE && !M.compact && rate && rate.prev !== null && rate.prev !== undefined) {
-    const bp = Math.round((rate.value - rate.prev) * 100);
-    const delta = row.addText(bp === 0 ? "flat" : `${bp > 0 ? "+" : "−"}${Math.abs(bp)} bp`);
-    delta.font = Font.regularSystemFont(M.delta);
-    delta.textColor = changeColor(bp);
-    delta.lineLimit = 1;
-    row.addSpacer(M.value * 0.35);
-  }
+  const figures = row.addStack();
+  figures.layoutVertically();
+  figures.spacing = 0;
 
-  const value = row.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
-  value.font = Font.semiboldRoundedSystemFont(M.value);
+  const value = figures.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
+  value.font = Font.boldRoundedSystemFont(M.value);
   value.textColor = COLORS.text;
   value.lineLimit = 1;
+  value.rightAlignText();
+
+  if (CONFIG.SHOW_CHANGE) {
+    const move = figures.addText(changeLabel(rate));
+    move.font = Font.mediumSystemFont(M.change);
+    move.textColor = changeColor(basisPoints(rate));
+    move.lineLimit = 1;
+    move.rightAlignText();
+  }
 }
 
 function buildWidget(rates, meta) {
@@ -504,8 +531,7 @@ function buildWidget(rates, meta) {
     return g;
   })();
 
-  // Top row: the date the figures are from on the left, the time of the last
-  // successful check on the right. Two different things, so they are apart.
+  // Top row: the date the figures are from, and the time of the last check.
   const head = widget.addStack();
   head.layoutHorizontally();
   head.centerAlignContent();
@@ -519,23 +545,20 @@ function buildWidget(rates, meta) {
   const asOf = head.addText(
     (headline ? formatDay(headline) : "No data") + (meta.stale ? " · cached" : "")
   );
-  asOf.font = Font.regularSystemFont(M.meta);
-  asOf.textColor = meta.stale ? COLORS.warn : COLORS.faint;
+  asOf.font = Font.mediumSystemFont(M.date);
+  asOf.textColor = meta.stale ? COLORS.warn : COLORS.dim;
   asOf.lineLimit = 1;
   asOf.minimumScaleFactor = 0.7;
-  if (M.header) head.addSpacer(6);
-  else head.addSpacer();
-  // In the square, "cached" already says the clock is the cache's, and both
-  // together overflow the line.
-  const showClock = !(M.compact && meta.stale);
-  const checked = head.addText(showClock ? `${formatClock(meta.refreshedAt)} ↻` : "↻");
-  checked.font = Font.regularSystemFont(M.meta);
+  head.addSpacer();
+  // No glyph: the schedule does the refreshing, and this says it is running.
+  const checked = head.addText(formatClock(meta.refreshedAt));
+  checked.font = Font.regularSystemFont(M.change);
   checked.textColor = COLORS.faint;
   checked.lineLimit = 1;
   checked.minimumScaleFactor = 0.7;
 
-  // Flexible spacers between the rows spread them evenly over whatever height
-  // the chosen widget size gives us.
+  // Flexible spacers spread the rows over whatever height is left, and
+  // collapse to nothing on the shortest devices rather than clipping a row.
   for (const series of SERIES) {
     widget.addSpacer();
     addRow(widget, series, rates[series.id], M, headline);

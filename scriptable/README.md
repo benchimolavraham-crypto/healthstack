@@ -1,32 +1,38 @@
 # Market Rates — iPhone Home Screen widget
 
-The latest 5Y, 7Y and 10Y Treasury yields and SOFR (the overnight rate), one
-rate per line, in a small (2x2) Home Screen widget. The top row carries the date
-the figures are from on the left and the time of the last successful check on
-the right. Tap the widget to check again.
+The latest 5Y, 7Y and 10Y Treasury yields and SOFR (the overnight rate) in a
+small (2x2) Home Screen widget — each rate in white, with the day's move
+stacked underneath it in red when it rose and green when it fell.
 
 ```
-Sep 15       7:46 AM ↻
+Sep 15         7:46 AM
 5-Year           4.83%
+                ▼ 12 bp
 7-Year           4.91%
-10-Year          5.00%
+                 ▲ 3 bp
+10-Year          4.72%
+                ▲ 12 bp
 SOFR Sep 12      3.64%
+                   flat
 ```
 
-A rate only carries its own date when it is older than the one on the top row.
-SOFR is an overnight rate published the following business morning, so it is
-often a day behind the Treasury curve — when they match, the SOFR row is just
-`SOFR`.
+Rising rates are the red ones: the default is a borrower's view, where a higher
+rate costs money. Flip `UP_IS_BAD` to `false` for the opposite. The arrow
+carries the direction too, so the move still reads without the colour.
 
-Medium and large sizes add the full labels and the day-over-day move in basis
-points:
+The top row is the date the figures are from, and the time of the last
+successful check. A rate shows its own date next to its name only when it is
+older than that — SOFR is published the following business morning, so it is
+often a day behind the Treasury curve.
+
+Medium and large sizes use the same layout with the full labels:
 
 ```
-MARKET RATES                        Sep 15 ↻
-Treasury 5-Year                  +1 bp 4.82%
-Treasury 7-Year                  +1 bp 4.88%
-Treasury 10-Year                 +1 bp 4.72%
-SOFR Sep 12                       flat 3.64%
+MARKET RATES                  Sep 15 7:46 AM
+Treasury 5-Year                        4.83%
+                                      ▼ 12 bp
+Treasury 7-Year                        4.91%
+                                       ▲ 3 bp
 ```
 
 The script detects which size you added and lays itself out accordingly.
@@ -78,13 +84,12 @@ the schedule.
 The clock on the top row is there to make that visible — if it is moving, the
 schedule is working.
 
-**There is no tappable button.** iOS does not give Scriptable widgets real
-controls, so the whole tile is a single tap target and the `↻` is a label on it,
-not a button of its own. With **When Interacting** set to **Run Script**, a tap
-anywhere opens Scriptable, fetches current rates and shows them; it also updates
-the saved copy, so the tile catches up on its next redraw. With **Open App** —
-Scriptable's default — a tap only opens the app and nothing refreshes, which is
-the usual reason the glyph seems dead.
+iOS does not give Scriptable widgets real controls, so there is no refresh
+button to add — the whole tile is a single tap target. With **When Interacting**
+set to **Run Script**, a tap anywhere opens Scriptable, fetches current rates
+and shows them, and updates the saved copy so the tile catches up on its next
+redraw. With **Open App** — Scriptable's default — a tap only opens the app and
+nothing refreshes.
 
 If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
 `"fred"` at the top of the script.
@@ -117,8 +122,10 @@ All at the top of `MarketRates.js`:
   above. Leaving it blank is fine.
 - `TAP_ACTION` — `"refresh"`, `"fred"` or `"none"` (see **Refreshing**).
 - `UP_IS_BAD` — `true` colours rising rates red (a borrower's view); `false`
-  colours them green. Only visible on the medium and large sizes.
-- `SHOW_CHANGE` — set to `false` to hide the basis-point move.
+  colours them green.
+- `SHOW_CHANGE` — set to `false` to hide the move entirely.
+- `CHANGE_UNIT` — `"bp"` shows `▲ 12 bp`, the usual way a rate move is quoted;
+  `"pct"` shows the same move as `▲ 0.12%`.
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
 
 ## If the widget is blank
@@ -139,7 +146,6 @@ this one inside that budget:
 If it still comes up blank, the script now draws the error text instead of
 nothing, so the widget itself will say what failed. Other things worth trying:
 
-- Check **When Interacting** is **Run Script**, not **Open App**.
 - Tap **▶** in the app once. That populates the saved copy the widget reads.
 - Remove the widget and add it again — iOS will keep showing a crashed widget's
   blank state for a while.
