@@ -1,26 +1,31 @@
 # Market Rates — iPhone Home Screen widget
 
-The latest 5Y, 7Y and 10Y Treasury yields and SOFR, one rate per line, in a
-small (2x2) Home Screen widget. Tap it to refresh.
+The latest 5Y, 7Y and 10Y Treasury yields and SOFR (the overnight rate), one
+rate per line, in a small (2x2) Home Screen widget. The data date and the
+refresh hint sit on the top row. Tap it to refresh.
 
 ```
+Sep 15               ↻
 5-Year           4.82%
 7-Year           4.88%
 10-Year          4.72%
-SOFR             3.64%
-Sep 15 · SOFR Sep 12  ↻
+SOFR Sep 12      3.64%
 ```
 
-Medium and large sizes work too, and add the full labels plus the
-day-over-day move in basis points:
+A rate only carries its own date when it is older than the one on the top row.
+SOFR is an overnight rate published the following business morning, so it is
+often a day behind the Treasury curve — when they match, the SOFR row is just
+`SOFR`.
+
+Medium and large sizes add the full labels and the day-over-day move in basis
+points:
 
 ```
-MARKET RATES                            FRED
+MARKET RATES                        Sep 15 ↻
 Treasury 5-Year                  +1 bp 4.82%
 Treasury 7-Year                  +1 bp 4.88%
 Treasury 10-Year                 +1 bp 4.72%
-SOFR                              flat 3.64%
-Treasuries Sep 15 · SOFR Sep 12    ↻ 7:46 AM
+SOFR Sep 12                       flat 3.64%
 ```
 
 The script detects which size you added and lays itself out accordingly.
@@ -66,13 +71,12 @@ If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
 
 Each source is only asked for what the one before it could not supply, so a
 single endpoint changing or going down does not blank the widget. When any rate
-falls back to the cache, the footer says `cached` (the wider sizes show `CACHED`
-in the header).
+falls back to the cache, the top row says `cached` next to the date.
 
 Treasury yields are not published on weekends or federal holidays, and SOFR is
 published a business day behind. The widget always shows the most recent
-*available* observation rather than a gap, and names both dates when they
-differ.
+*available* observation rather than a gap, and shows that rate's own date
+beside it.
 
 ## Settings
 

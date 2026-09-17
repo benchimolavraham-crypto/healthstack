@@ -326,12 +326,12 @@ function writeCache(payload) {
 function metrics(family) {
   if (family === "small") {
     // No room for a header, full names, or the bp change at this size.
-    return { padT: 13, padX: 13, padB: 11, header: 0, label: 11.5, value: 16, delta: 0, footer: 8.5, compact: true };
+    return { padT: 12, padX: 13, padB: 12, header: 0, label: 12, value: 17, delta: 0, meta: 8.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 20, padX: 20, padB: 18, header: 12, label: 17, value: 24, delta: 12, footer: 11 };
+    return { padT: 18, padX: 20, padB: 18, header: 12, label: 17, value: 24, delta: 12, meta: 11 };
   }
-  return { padT: 12, padX: 14, padB: 10, header: 10.5, label: 13, value: 17.5, delta: 9.5, footer: 9 };
+  return { padT: 12, padX: 14, padB: 12, header: 10.5, label: 13, value: 17.5, delta: 9.5, meta: 9 };
 }
 
 function formatDay(ts) {
@@ -354,9 +354,17 @@ function changeColor(bp) {
   return isBad ? COLORS.bad : COLORS.good;
 }
 
+// The newest observation date across the four rates — the widget's "as of".
+function headlineDate(rates) {
+  const days = SERIES.map((x) => rates[x.id]).filter(Boolean).map((r) => r.date);
+  return days.length ? Math.max(...days) : null;
+}
+
 // One rate per line: name on the left, percentage on the right. The change sits
 // left of the percentage so every percentage lands on the same right edge.
-function addRow(widget, series, rate, M) {
+// A rate older than the headline date carries its own date, right beside it —
+// SOFR is an overnight rate, so it is often a business day behind the curve.
+function addRow(widget, series, rate, M, headline) {
   const row = widget.addStack();
   row.layoutHorizontally();
   row.centerAlignContent();
@@ -366,6 +374,14 @@ function addRow(widget, series, rate, M) {
   label.textColor = COLORS.dim;
   label.lineLimit = 1;
   label.minimumScaleFactor = 0.7;
+
+  if (rate && headline && formatDay(rate.date) !== formatDay(headline)) {
+    row.addSpacer(4);
+    const own = row.addText(formatDay(rate.date));
+    own.font = Font.regularSystemFont(M.meta);
+    own.textColor = COLORS.faint;
+    own.lineLimit = 1;
+  }
 
   row.addSpacer();
 
@@ -384,25 +400,10 @@ function addRow(widget, series, rate, M) {
   value.lineLimit = 1;
 }
 
-// "Data as of Sep 15" when everything shares a date, otherwise it names both —
-// SOFR is published a business day behind the Treasury curve.
-function footerLeft(rates, M, stale) {
-  const suffix = stale && M.compact ? " · cached" : "";
-  const ust = TREASURY_IDS.map((id) => rates[id]).filter(Boolean).map((r) => r.date);
-  const sofr = rates.SOFR ? rates.SOFR.date : null;
-  const ustDay = ust.length ? Math.max(...ust) : null;
-  if (ustDay && sofr && formatDay(ustDay) !== formatDay(sofr)) {
-    const label = M.compact ? formatDay(ustDay) : `Treasuries ${formatDay(ustDay)}`;
-    return `${label} · SOFR ${formatDay(sofr)}${suffix}`;
-  }
-  const any = ustDay || sofr;
-  if (!any) return "No data available";
-  return M.compact ? `${formatDay(any)}${suffix}` : `Data as of ${formatDay(any)}`;
-}
-
 function buildWidget(rates, meta) {
   const family = config.widgetFamily || "medium";
   const M = metrics(family);
+  const headline = headlineDate(rates);
 
   const widget = new ListWidget();
   // With "refresh" the tap is handled by the widget's "When Interacting"
@@ -421,47 +422,38 @@ function buildWidget(rates, meta) {
     return g;
   })();
 
+  // Top row: the data date on the left, the refresh hint on the right.
+  const head = widget.addStack();
+  head.layoutHorizontally();
+  head.centerAlignContent();
   if (M.header) {
-    const head = widget.addStack();
-    head.layoutHorizontally();
-    head.centerAlignContent();
     const title = head.addText("MARKET RATES");
     title.font = Font.semiboldSystemFont(M.header);
     title.textColor = COLORS.dim;
     title.lineLimit = 1;
+    // Pushes the date and glyph together against the right edge.
     head.addSpacer();
-    const tagText = meta.stale ? "CACHED" : meta.sources.join(" · ");
-    if (tagText) {
-      const tag = head.addText(tagText);
-      tag.font = Font.regularSystemFont(M.header - 0.5);
-      tag.textColor = meta.stale ? COLORS.warn : COLORS.faint;
-      tag.lineLimit = 1;
-    }
   }
+  const asOf = head.addText(
+    (headline ? formatDay(headline) : "No data") + (meta.stale ? " · cached" : "")
+  );
+  asOf.font = Font.regularSystemFont(M.meta);
+  asOf.textColor = meta.stale ? COLORS.warn : COLORS.faint;
+  asOf.lineLimit = 1;
+  asOf.minimumScaleFactor = 0.7;
+  // Without a title the date holds the left edge, so the glyph needs the push.
+  if (M.header) head.addSpacer(5);
+  else head.addSpacer();
+  const refresh = head.addText("↻");
+  refresh.font = Font.regularSystemFont(M.meta + 1.5);
+  refresh.textColor = COLORS.faint;
 
   // Flexible spacers between the rows spread them evenly over whatever height
   // the chosen widget size gives us.
   for (const series of SERIES) {
     widget.addSpacer();
-    addRow(widget, series, rates[series.id], M);
+    addRow(widget, series, rates[series.id], M, headline);
   }
-  widget.addSpacer();
-
-  const foot = widget.addStack();
-  foot.layoutHorizontally();
-  foot.centerAlignContent();
-  const asOf = foot.addText(footerLeft(rates, M, meta.stale));
-  asOf.font = Font.regularSystemFont(M.footer);
-  asOf.textColor = COLORS.faint;
-  asOf.lineLimit = 1;
-  asOf.minimumScaleFactor = 0.7;
-  foot.addSpacer();
-  const stamp = foot.addText(
-    M.compact ? "↻" : `↻ ${formatClock(meta.refreshedAt)}`
-  );
-  stamp.font = Font.regularSystemFont(M.compact ? M.footer + 1.5 : M.footer);
-  stamp.textColor = COLORS.faint;
-  stamp.lineLimit = 1;
 
   widget.refreshAfterDate = new Date(Date.now() + CONFIG.REFRESH_MINUTES * 60 * 1000);
   return widget;
