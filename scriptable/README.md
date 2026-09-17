@@ -115,6 +115,29 @@ All at the top of `MarketRates.js`:
 - `SHOW_CHANGE` — set to `false` to hide the basis-point move.
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
 
+## If the widget is blank
+
+A Scriptable widget draws as an empty black square when its script throws, runs
+out of memory, or is cut off — a widget gets far less of both than the app, so a
+script can work under **▶** and still fail on the Home Screen. Three things keep
+this one inside that budget:
+
+- When the saved copy is not yet due for a refresh, the widget renders from it
+  and makes **no network request at all**.
+- The CSV is read newest-first and stops at the two observations each rate
+  needs, so it costs the same whether FRED returns three weeks or, ignoring the
+  start date, sixty years of history.
+- Requests time out in 6 seconds inside a widget, falling back to the saved copy
+  rather than being killed mid-request.
+
+If it still comes up blank, the script now draws the error text instead of
+nothing, so the widget itself will say what failed. Other things worth trying:
+
+- Check **When Interacting** is **Run Script**, not **Open App**.
+- Tap **▶** in the app once. That populates the saved copy the widget reads.
+- Remove the widget and add it again — iOS will keep showing a crashed widget's
+  blank state for a while.
+
 ## Notes
 
 This folder is standalone — it is not part of the Next.js app and is excluded

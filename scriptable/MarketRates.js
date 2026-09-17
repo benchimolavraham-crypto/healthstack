@@ -36,6 +36,9 @@ const CONFIG = {
 
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
+  // A widget is killed long before 15s, so it gets a tighter budget and falls
+  // back to the saved copy instead of being cut off mid-request.
+  WIDGET_TIMEOUT_SECONDS: 6,
 };
 
 const SERIES = [
@@ -59,6 +62,10 @@ const COLORS = {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+
+function timeoutSeconds() {
+  return config.runsInWidget ? CONFIG.WIDGET_TIMEOUT_SECONDS : CONFIG.TIMEOUT_SECONDS;
+}
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -140,14 +147,14 @@ function toRate(points) {
 
 async function getString(url) {
   const req = new Request(url);
-  req.timeoutInterval = CONFIG.TIMEOUT_SECONDS;
+  req.timeoutInterval = timeoutSeconds();
   req.headers = { "User-Agent": "Scriptable Market Rates Widget" };
   return await req.loadString();
 }
 
 async function getJson(url) {
   const req = new Request(url);
-  req.timeoutInterval = CONFIG.TIMEOUT_SECONDS;
+  req.timeoutInterval = timeoutSeconds();
   req.headers = { Accept: "application/json", "User-Agent": "Scriptable Market Rates Widget" };
   return await req.loadJSON();
 }
@@ -182,22 +189,45 @@ async function fetchFredApi(key) {
 // 1b. FRED's public CSV download — all four series, one request, no key.
 async function fetchFredCsv() {
   const start = new Date();
-  start.setDate(start.getDate() - 75);
+  start.setDate(start.getDate() - 20);
   const cosd = `${start.getFullYear()}-${pad2(start.getMonth() + 1)}-${pad2(start.getDate())}`;
   const url =
     "https://fred.stlouisfed.org/graph/fredgraph.csv" +
     `?id=${SERIES.map((s) => s.id).join(",")}&cosd=${cosd}`;
 
-  const { header, rows } = csvRows(await getString(url));
-  const upper = header.map((h) => h.toUpperCase());
-  const out = {};
+  const lines = (await getString(url)).trim().split(/\r?\n/);
+  if (lines.length < 2) throw new Error("CSV had no data rows");
+
+  const header = parseCsvLine(lines[0]).map((h) => h.toUpperCase());
+  const cols = {};
   for (const s of SERIES) {
-    const col = upper.indexOf(s.id);
-    if (col < 0) continue;
-    const rate = toRate(
-      rows.map((r) => ({ value: num(r[col]), date: parseDateLoose(r[0]) }))
-    );
-    if (rate) out[s.id] = rate;
+    const col = header.indexOf(s.id);
+    if (col >= 0) cols[s.id] = col;
+  }
+  const ids = Object.keys(cols);
+
+  // Read newest-first and stop as soon as every series has the two
+  // observations it needs. If FRED ignores the start date it answers with
+  // decades of history, which a widget does not have the memory to walk.
+  const found = {};
+  for (const id of ids) found[id] = [];
+  for (let i = lines.length - 1; i > 0; i--) {
+    if (ids.every((id) => found[id].length >= 2)) break;
+    if (!lines[i].trim()) continue;
+    const cells = parseCsvLine(lines[i]);
+    const date = parseDateLoose(cells[0]);
+    if (!date) continue;
+    for (const id of ids) {
+      if (found[id].length >= 2) continue;
+      const value = num(cells[cols[id]]);
+      if (value !== null) found[id].push({ value, date });
+    }
+  }
+
+  const out = {};
+  for (const id of ids) {
+    const rate = toRate(found[id]);
+    if (rate) out[id] = rate;
   }
   return out;
 }
@@ -241,7 +271,7 @@ async function fetchSofrNyFed() {
   return toRate(pts);
 }
 
-async function loadRates() {
+async function loadRates(fredOnly) {
   const rates = {};
   const sources = [];
   const errors = [];
@@ -273,6 +303,10 @@ async function loadRates() {
       errors.push(`FRED CSV: ${e.message}`);
     }
   }
+  // Each extra source is another sequential request. A widget that already
+  // has a saved copy to fall back on is better off stopping here.
+  if (fredOnly) return { rates, sources, errors };
+
   if (TREASURY_IDS.some((id) => !rates[id])) {
     try {
       merge(await fetchTreasury(), "U.S. Treasury");
@@ -511,30 +545,92 @@ function buildWidget(rates, meta) {
 // Run
 // ---------------------------------------------------------------------------
 
-const { rates, sources, errors } = await loadRates();
-const freshCount = Object.keys(rates).length;
-const cached = readCache();
+// Last resort if even buildWidget fails: a widget with a line of text beats
+// the empty black square iOS shows when a widget script throws.
+function fallbackWidget(message) {
+  const widget = new ListWidget();
+  widget.setPadding(12, 13, 12, 13);
+  const text = widget.addText(message);
+  text.font = Font.regularSystemFont(11);
+  text.textColor = COLORS.dim;
+  return widget;
+}
 
-const meta = { sources, stale: false, refreshedAt: new Date() };
-
-// Anything a source could not supply falls back to the last good value, so a
-// weak signal degrades to slightly old numbers instead of blank tiles.
-if (cached && freshCount < SERIES.length) {
-  for (const s of SERIES) {
-    if (!rates[s.id] && cached.rates[s.id]) {
-      rates[s.id] = cached.rates[s.id];
-      meta.stale = true;
-    }
+function safeWidget(rates, meta) {
+  try {
+    return buildWidget(rates, meta);
+  } catch (e) {
+    return fallbackWidget(`Market Rates\ncould not draw:\n${e}`);
   }
 }
-if (freshCount > 0) writeCache({ savedAt: Date.now(), rates, sources });
-// With nothing fetched at all, the honest timestamp is when the cache was written.
-if (freshCount === 0 && cached) meta.refreshedAt = new Date(cached.savedAt);
 
-const widget = buildWidget(rates, meta);
+function metaFromCache(cached, stale) {
+  return {
+    sources: (cached && cached.sources) || [],
+    stale: stale,
+    refreshedAt: cached ? new Date(cached.savedAt) : new Date(),
+  };
+}
+
+async function resolve() {
+  const cached = readCache();
+  const dueAt = cached ? cached.savedAt + minutesUntilNextCheck() * 60 * 1000 : 0;
+  const cacheIsCurrent = Boolean(cached) && Date.now() < dueAt;
+
+  // A widget holding a copy that is not due yet renders straight from it. No
+  // network work at all is the only way to be sure of drawing something inside
+  // the budget iOS allows widget code, and the numbers cannot have changed.
+  if (config.runsInWidget && cacheIsCurrent) {
+    return { rates: cached.rates, meta: metaFromCache(cached, false), errors: [] };
+  }
+
+  const { rates, sources, errors } = await loadRates(config.runsInWidget && Boolean(cached));
+  const freshCount = Object.keys(rates).length;
+  const meta = { sources, stale: false, refreshedAt: new Date() };
+
+  // Anything a source could not supply falls back to the last good value, so a
+  // weak signal degrades to slightly old numbers instead of blank rows.
+  if (cached && freshCount < SERIES.length) {
+    for (const s of SERIES) {
+      if (!rates[s.id] && cached.rates[s.id]) {
+        rates[s.id] = cached.rates[s.id];
+        meta.stale = true;
+      }
+    }
+  }
+  if (freshCount > 0) writeCache({ savedAt: Date.now(), rates, sources });
+  // With nothing fetched at all, the honest timestamp is the cache's.
+  if (freshCount === 0 && cached) meta.refreshedAt = new Date(cached.savedAt);
+
+  return { rates, meta, errors };
+}
+
+let rates = {};
+let meta = metaFromCache(null, false);
+let errors = [];
+
+try {
+  const resolved = await resolve();
+  rates = resolved.rates;
+  meta = resolved.meta;
+  errors = resolved.errors;
+} catch (e) {
+  // Whatever went wrong, draw something. An uncaught error here is what leaves
+  // a Scriptable widget as an empty black square.
+  errors = [String(e)];
+  try {
+    const cached = readCache();
+    if (cached) {
+      rates = cached.rates;
+      meta = metaFromCache(cached, true);
+    }
+  } catch (inner) {
+    // fall through to empty rows
+  }
+}
 
 if (config.runsInWidget) {
-  Script.setWidget(widget);
+  Script.setWidget(safeWidget(rates, meta));
 } else {
   if (errors.length) console.log(`Sources that failed:\n${errors.join("\n")}`);
   console.log(
@@ -545,7 +641,7 @@ if (config.runsInWidget) {
   );
   // Tapping the widget lands here, so present the square layout it matches.
   config.widgetFamily = "small";
-  await buildWidget(rates, meta).presentSmall();
+  await safeWidget(rates, meta).presentSmall();
 }
 
 Script.complete();
