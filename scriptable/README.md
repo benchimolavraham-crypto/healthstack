@@ -1,14 +1,15 @@
 # Market Rates — iPhone Home Screen widget
 
 The latest 5Y, 7Y and 10Y Treasury yields and SOFR (the overnight rate), one
-rate per line, in a small (2x2) Home Screen widget. The data date and the
-refresh hint sit on the top row. Tap it to refresh.
+rate per line, in a small (2x2) Home Screen widget. The top row carries the date
+the figures are from on the left and the time of the last successful check on
+the right. Tap the widget to check again.
 
 ```
-Sep 15               ↻
-5-Year           4.82%
-7-Year           4.88%
-10-Year          4.72%
+Sep 15       7:46 AM ↻
+5-Year           4.83%
+7-Year           4.91%
+10-Year          5.00%
 SOFR Sep 12      3.64%
 ```
 
@@ -73,12 +74,17 @@ inside the refresh budget iOS allows a widget — around 40 to 70 a day, and it
 throttles anything greedier. Set `REFRESH` to a number of minutes to override
 the schedule.
 
-`refreshAfterDate` is only a hint; iOS decides when a widget actually redraws,
-and there is no way for a Scriptable widget to force it. So the `↻` in the
-corner is a hint, not a button: tapping the widget runs the script, which
-fetches current rates and shows them immediately inside Scriptable. That also
-updates the saved copy the widget reads, so the Home Screen tile picks up the
-new numbers on its next redraw.
+`refreshAfterDate` is only a hint; iOS decides when a widget actually redraws.
+The clock on the top row is there to make that visible — if it is moving, the
+schedule is working.
+
+**There is no tappable button.** iOS does not give Scriptable widgets real
+controls, so the whole tile is a single tap target and the `↻` is a label on it,
+not a button of its own. With **When Interacting** set to **Run Script**, a tap
+anywhere opens Scriptable, fetches current rates and shows them; it also updates
+the saved copy, so the tile catches up on its next redraw. With **Open App** —
+Scriptable's default — a tap only opens the app and nothing refreshes, which is
+the usual reason the glyph seems dead.
 
 If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
 `"fred"` at the top of the script.

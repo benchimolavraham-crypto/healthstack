@@ -504,7 +504,8 @@ function buildWidget(rates, meta) {
     return g;
   })();
 
-  // Top row: the data date on the left, the refresh hint on the right.
+  // Top row: the date the figures are from on the left, the time of the last
+  // successful check on the right. Two different things, so they are apart.
   const head = widget.addStack();
   head.layoutHorizontally();
   head.centerAlignContent();
@@ -513,7 +514,6 @@ function buildWidget(rates, meta) {
     title.font = Font.semiboldSystemFont(M.header);
     title.textColor = COLORS.dim;
     title.lineLimit = 1;
-    // Pushes the date and glyph together against the right edge.
     head.addSpacer();
   }
   const asOf = head.addText(
@@ -523,12 +523,16 @@ function buildWidget(rates, meta) {
   asOf.textColor = meta.stale ? COLORS.warn : COLORS.faint;
   asOf.lineLimit = 1;
   asOf.minimumScaleFactor = 0.7;
-  // Without a title the date holds the left edge, so the glyph needs the push.
-  if (M.header) head.addSpacer(5);
+  if (M.header) head.addSpacer(6);
   else head.addSpacer();
-  const refresh = head.addText("↻");
-  refresh.font = Font.regularSystemFont(M.meta + 1.5);
-  refresh.textColor = COLORS.faint;
+  // In the square, "cached" already says the clock is the cache's, and both
+  // together overflow the line.
+  const showClock = !(M.compact && meta.stale);
+  const checked = head.addText(showClock ? `${formatClock(meta.refreshedAt)} ↻` : "↻");
+  checked.font = Font.regularSystemFont(M.meta);
+  checked.textColor = COLORS.faint;
+  checked.lineLimit = 1;
+  checked.minimumScaleFactor = 0.7;
 
   // Flexible spacers between the rows spread them evenly over whatever height
   // the chosen widget size gives us.
