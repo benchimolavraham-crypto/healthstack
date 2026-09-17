@@ -52,9 +52,11 @@ const CONFIG = {
 
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
-  // A widget is killed long before 15s, so it gets a tighter budget and falls
-  // back to the saved copy instead of being cut off mid-request.
-  WIDGET_TIMEOUT_SECONDS: 6,
+  // A widget is killed before the app would be, so it gets a tighter budget and
+  // falls back to the saved copy rather than being cut off mid-request. Too
+  // tight and every widget fetch times out while tapping still works, which
+  // looks exactly like the widget not refreshing at all.
+  WIDGET_TIMEOUT_SECONDS: 10,
 };
 
 const SERIES = [
@@ -408,19 +410,17 @@ async function loadRates(fredOnly) {
 // Refresh cadence
 // ---------------------------------------------------------------------------
 
-// Neither source moves intraday. Treasury yields are a single daily figure off
-// the afternoon close, on FRED by early evening New York time; SOFR is one
-// figure per business day, published around 8am New York time for the previous
-// business day. So the checks cluster in those two windows and back off in
-// between, rather than burning the refresh budget iOS allows on numbers that
-// cannot have changed.
+// Neither source moves intraday: the Treasury curve is one daily figure that
+// reaches FRED in the early evening New York time, and SOFR is one figure a
+// business day, published around 8am. Both windows fall inside the working day,
+// so rather than chase them the widget just asks to be woken every twenty
+// minutes while the market is awake and backs off when it is not. That is about
+// 44 wake-ups on a weekday, inside the 40-70 iOS allows before it throttles,
+// and it keeps the clock on the widget visibly moving.
 function refreshMinutesFor(weekday, hour) {
-  if (weekday === "Sat" || weekday === "Sun") return 240;
-  if (hour < 8) return 120;
-  if (hour < 10) return 15; // SOFR posts ~8am ET
-  if (hour < 16) return 60;
-  if (hour < 20) return 15; // the Treasury curve reaches FRED late afternoon
-  return 120;
+  if (weekday === "Sat" || weekday === "Sun") return 180;
+  if (hour >= 8 && hour < 20) return 20;
+  return 90;
 }
 
 function easternNow() {
@@ -459,23 +459,48 @@ function cachePath() {
   return fm.joinPath(fm.documentsDirectory(), CONFIG.CACHE_FILE);
 }
 
-function readCache() {
+function readCacheRaw() {
   try {
     const fm = FileManager.local();
     const path = cachePath();
     if (!fm.fileExists(path)) return null;
-    const parsed = JSON.parse(fm.readString(path));
-    return parsed && parsed.rates ? parsed : null;
+    return JSON.parse(fm.readString(path));
   } catch (e) {
     return null;
   }
 }
 
+function readCache() {
+  const parsed = readCacheRaw();
+  return parsed && parsed.rates ? parsed : null;
+}
+
 function writeCache(payload) {
   try {
-    FileManager.local().writeString(cachePath(), JSON.stringify(payload));
+    const existing = readCacheRaw();
+    const runs = existing && Array.isArray(existing.runs) ? existing.runs : [];
+    FileManager.local().writeString(cachePath(), JSON.stringify({ ...payload, runs }));
   } catch (e) {
     // a cache write failure is never worth failing the widget over
+  }
+}
+
+// A widget cannot be watched while it runs, and a silent fall back to the saved
+// copy looks identical to never having been woken at all. Each run leaves a
+// line behind so the next run in the app can say which it was.
+function recordRun(outcome) {
+  try {
+    const payload = readCacheRaw() || {};
+    const runs = Array.isArray(payload.runs) ? payload.runs : [];
+    runs.push({
+      t: Date.now(),
+      ctx: config.runsInWidget ? "widget" : "app",
+      outcome: String(outcome).slice(0, 90),
+    });
+    payload.runs = runs.slice(-12);
+    FileManager.local().writeString(cachePath(), JSON.stringify(payload));
+  } catch (e) {
+    // diagnostics must never be the thing that breaks the widget
   }
 }
 
@@ -690,7 +715,8 @@ async function resolve() {
   if (config.runsInWidget && justFetched) {
     const meta = metaFromCache(cached, false);
     meta.nextCheckAt = Math.max(dueAt, now + 60 * 1000);
-    return { rates: cached.rates, meta, errors: [] };
+    const age = Math.round((now - cached.savedAt) / 60000);
+    return { rates: cached.rates, meta, errors: [], outcome: `skipped, fetched ${age}m ago` };
   }
 
   const { rates, sources, errors } = await loadRates(config.runsInWidget && Boolean(cached));
@@ -707,27 +733,32 @@ async function resolve() {
       }
     }
   }
+  let outcome = `fetched ${freshCount}/${SERIES.length} from ${sources.join(", ") || "nowhere"}`;
   if (freshCount > 0) writeCache({ savedAt: now, rates, sources });
   if (freshCount === 0) {
+    outcome = `NO DATA — ${errors[0] || "every source failed"}`;
     // Nothing came back: keep the cache's timestamp honest and try again soon
     // rather than sitting out a whole quiet-hours interval.
     if (cached) meta.refreshedAt = new Date(cached.savedAt);
     meta.nextCheckAt = now + 15 * 60 * 1000;
   }
 
-  return { rates, meta, errors };
+  return { rates, meta, errors, outcome };
 }
 
 let rates = {};
 let meta = metaFromCache(null, false);
 let errors = [];
+let outcome = "unknown";
 
 try {
   const resolved = await resolve();
   rates = resolved.rates;
   meta = resolved.meta;
   errors = resolved.errors;
+  outcome = resolved.outcome;
 } catch (e) {
+  outcome = `CRASHED — ${e}`;
   // Whatever went wrong, draw something. An uncaught error here is what leaves
   // a Scriptable widget as an empty black square.
   errors = [String(e)];
@@ -742,15 +773,35 @@ try {
   }
 }
 
+recordRun(outcome);
+
 if (config.runsInWidget) {
   Script.setWidget(safeWidget(rates, meta));
 } else {
-  if (errors.length) console.log(`Sources that failed:\n${errors.join("\n")}`);
   console.log(
     SERIES.map((s) => {
       const r = rates[s.id];
       return r ? `${s.label}: ${r.value.toFixed(2)}%  (${formatDay(r.date)})` : `${s.label}: no data`;
     }).join("\n")
+  );
+  if (errors.length) console.log(`\nSources that failed:\n${errors.join("\n")}`);
+
+  // The point of the log: lines marked "widget" prove iOS is waking it, and
+  // their outcome says whether the fetch got through.
+  const runs = (readCacheRaw() || {}).runs || [];
+  const stamp = new DateFormatter();
+  stamp.dateFormat = "MMM d h:mm a";
+  console.log("\n--- recent runs (newest last) ---");
+  console.log(
+    runs.length
+      ? runs.map((r) => `${stamp.string(new Date(r.t))}  ${r.ctx.padEnd(6)} ${r.outcome}`).join("\n")
+      : "(none recorded yet)"
+  );
+  const wakes = runs.filter((r) => r.ctx === "widget");
+  console.log(
+    wakes.length
+      ? `\niOS has woken the widget ${wakes.length} time(s) in this log.`
+      : "\niOS has NOT woken the widget yet — every run here was a tap."
   );
   // Tapping the widget lands here, so present the square layout it matches.
   config.widgetFamily = "small";

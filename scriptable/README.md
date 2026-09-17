@@ -89,13 +89,15 @@ So there is nothing to stream — checking every minute would return the same
 number all day. Instead the widget aims its checks at the two windows when a new
 figure actually posts:
 
-| New York time | Check every | Why |
-| --- | --- | --- |
-| 8:00–10:00am | 15 min | SOFR posts |
-| 10:00am–4:00pm | 60 min | nothing new expected |
-| 4:00–8:00pm | 15 min | Treasury curve reaches FRED |
-| 8:00pm–8:00am | 120 min | nothing new expected |
-| Weekends | 240 min | no publication |
+| New York time | Wake-up asked for |
+| --- | --- |
+| Weekday 8:00am–8:00pm | every 20 min |
+| Weekday 8:00pm–8:00am | every 90 min |
+| Weekend | every 3 hours |
+
+That is about 44 wake-ups on a weekday, inside the 40-70 iOS allows before it
+throttles. Both publication windows fall inside the working day, so a new figure
+shows up within about twenty minutes of posting.
 
 That is the schedule the widget *asks* for. iOS decides when a widget actually
 wakes, and it often spends a wake-up earlier than requested — so the widget
@@ -106,14 +108,31 @@ push the following one further out.
 
 Set `REFRESH` to a number of minutes to replace the schedule with a fixed one.
 
-**If it only updates when you tap it**, the script is not being woken at all,
-which is a device setting rather than anything in here:
+### If the Updated time is stuck
 
-- **Settings → General → Background App Refresh** must be on, and on for
-  Scriptable.
-- **Low Power Mode** suppresses widget refreshes — check the battery icon.
-- A widget on a Home Screen page you rarely open is woken less often than one
-  you look at regularly; iOS learns from use.
+A widget cannot be watched while it runs, so it keeps a log. Open the script in
+Scriptable, tap **▶**, close the preview, and read the console underneath:
+
+```
+--- recent runs (newest last) ---
+Sep 17, 10:45 AM  widget fetched 4/4 from FRED
+Sep 17, 11:05 AM  widget NO DATA — FRED CSV: The request timed out.
+Sep 17, 11:26 AM  app    fetched 4/4 from FRED
+
+iOS has woken the widget 3 time(s) in this log.
+```
+
+- Lines marked **widget** are iOS waking it on its own. If there are none, the
+  script is never being run in the background — check **Settings → General →
+  Background App Refresh** (on, and on for Scriptable) and that **Low Power
+  Mode** is off. A widget on a Home Screen page you rarely open is also woken
+  less often.
+- **widget** lines reading **NO DATA** mean it is being woken but the request is
+  not getting through in the time a widget is allowed. Raise
+  `WIDGET_TIMEOUT_SECONDS`.
+- **widget** lines reading **fetched** mean it is working. Treasury yields and
+  SOFR only change once a business day, so the rates themselves staying put is
+  normal — the Updated clock is the thing that should move.
 
 `refreshAfterDate` is only a hint; iOS decides when a widget actually redraws.
 The clock on the top row is there to make that visible — if it is moving, the
