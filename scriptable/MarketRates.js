@@ -29,8 +29,10 @@ const CONFIG = {
   TAP_ACTION: "refresh",
   FRED_URL: "https://fred.stlouisfed.org/graph/?id=DGS5,DGS7,DGS10,SOFR",
 
-  // How often iOS is asked to refresh. iOS treats this as a hint.
-  REFRESH_MINUTES: 30,
+  // How often iOS is asked to refresh, as a hint it is free to ignore.
+  // "auto" aims the checks at the windows when new numbers actually post;
+  // a number forces that many minutes instead.
+  REFRESH: "auto",
 
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
@@ -291,6 +293,52 @@ async function loadRates() {
 }
 
 // ---------------------------------------------------------------------------
+// Refresh cadence
+// ---------------------------------------------------------------------------
+
+// Neither source moves intraday. Treasury yields are a single daily figure off
+// the afternoon close, on FRED by early evening New York time; SOFR is one
+// figure per business day, published around 8am New York time for the previous
+// business day. So the checks cluster in those two windows and back off in
+// between, rather than burning the refresh budget iOS allows on numbers that
+// cannot have changed.
+function refreshMinutesFor(weekday, hour) {
+  if (weekday === "Sat" || weekday === "Sun") return 240;
+  if (hour < 8) return 120;
+  if (hour < 10) return 15; // SOFR posts ~8am ET
+  if (hour < 16) return 90;
+  if (hour < 20) return 15; // the Treasury curve reaches FRED late afternoon
+  return 120;
+}
+
+function easternNow() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "numeric",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type) => {
+    const found = parts.find((x) => x.type === type);
+    return found ? found.value : null;
+  };
+  const hour = Number(get("hour"));
+  if (!Number.isFinite(hour)) throw new Error("no hour in formatted date");
+  return { weekday: get("weekday"), hour: hour % 24 };
+}
+
+function minutesUntilNextCheck() {
+  if (typeof CONFIG.REFRESH === "number") return CONFIG.REFRESH;
+  try {
+    const { weekday, hour } = easternNow();
+    return refreshMinutesFor(weekday, hour);
+  } catch (e) {
+    // No time-zone database on this device — fall back to a flat hour.
+    return 60;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cache — so the widget still shows real numbers with no signal
 // ---------------------------------------------------------------------------
 
@@ -455,7 +503,7 @@ function buildWidget(rates, meta) {
     addRow(widget, series, rates[series.id], M, headline);
   }
 
-  widget.refreshAfterDate = new Date(Date.now() + CONFIG.REFRESH_MINUTES * 60 * 1000);
+  widget.refreshAfterDate = new Date(Date.now() + minutesUntilNextCheck() * 60 * 1000);
   return widget;
 }
 

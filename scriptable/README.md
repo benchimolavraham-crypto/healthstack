@@ -48,14 +48,37 @@ No API key is required.
 
 ## Refreshing
 
-iOS decides when a widget redraws itself — typically a few times an hour, and it
-throttles apps that ask for more. There is no way for a Scriptable widget to
-refresh itself on demand.
+Neither number moves during the day:
 
-So the `↻` in the corner is a hint, not a button: tapping the widget runs the
-script, which fetches current rates and shows them immediately inside
-Scriptable. That also updates the saved copy the widget reads, so the Home
-Screen tile picks up the new numbers on its next redraw.
+- **Treasury yields** are a single daily figure derived from the ~3:30pm ET
+  close. Treasury publishes them late afternoon and they reach FRED by early
+  evening ET. One new value per business day.
+- **SOFR** is one figure per business day, published by the New York Fed around
+  8:00am ET for the *previous* business day.
+
+So there is nothing to stream — checking every minute would return the same
+number all day. Instead the widget aims its checks at the two windows when a new
+figure actually posts:
+
+| New York time | Check every | Why |
+| --- | --- | --- |
+| 8:00–10:00am | 15 min | SOFR posts |
+| 10:00am–4:00pm | 90 min | nothing new expected |
+| 4:00–8:00pm | 15 min | Treasury curve reaches FRED |
+| 8:00pm–8:00am | 120 min | nothing new expected |
+| Weekends | 240 min | no publication |
+
+That is roughly 34 checks on a weekday and 6 on a weekend day, which stays
+inside the refresh budget iOS allows a widget — around 40 to 70 a day, and it
+throttles anything greedier. Set `REFRESH` to a number of minutes to override
+the schedule.
+
+`refreshAfterDate` is only a hint; iOS decides when a widget actually redraws,
+and there is no way for a Scriptable widget to force it. So the `↻` in the
+corner is a hint, not a button: tapping the widget runs the script, which
+fetches current rates and shows them immediately inside Scriptable. That also
+updates the saved copy the widget reads, so the Home Screen tile picks up the
+new numbers on its next redraw.
 
 If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
 `"fred"` at the top of the script.
@@ -90,8 +113,7 @@ All at the top of `MarketRates.js`:
 - `UP_IS_BAD` — `true` colours rising rates red (a borrower's view); `false`
   colours them green. Only visible on the medium and large sizes.
 - `SHOW_CHANGE` — set to `false` to hide the basis-point move.
-- `REFRESH_MINUTES` — how often iOS is *asked* to refresh; it treats this as a
-  hint.
+- `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
 
 ## Notes
 
