@@ -1,9 +1,18 @@
 # Market Rates — iPhone Home Screen widget
 
-A Scriptable widget showing the latest 5Y, 7Y and 10Y Treasury yields and SOFR,
-one rate per line, with the day-over-day move in basis points.
+The latest 5Y, 7Y and 10Y Treasury yields and SOFR, one rate per line, in a
+small (2x2) Home Screen widget. Tap it to refresh.
 
-Medium size:
+```
+5-Year           4.82%
+7-Year           4.88%
+10-Year          4.72%
+SOFR             3.64%
+Sep 15 · SOFR Sep 12  ↻
+```
+
+Medium and large sizes work too, and add the full labels plus the
+day-over-day move in basis points:
 
 ```
 MARKET RATES                            FRED
@@ -12,16 +21,6 @@ Treasury 7-Year                  +1 bp 4.88%
 Treasury 10-Year                 +1 bp 4.72%
 SOFR                              flat 3.64%
 Treasuries Sep 15 · SOFR Sep 12    ↻ 7:46 AM
-```
-
-Small size — same data, trimmed to fit a single square slot:
-
-```
-5-Year           4.82%
-7-Year           4.88%
-10-Year          4.72%
-SOFR             3.64%
-Sep 15 · SOFR Sep 12
 ```
 
 The script detects which size you added and lays itself out accordingly.
@@ -35,11 +34,26 @@ The script detects which size you added and lays itself out accordingly.
    (tap the settings icon at the bottom of the editor).
 4. Tap **▶** once to confirm it pulls live numbers.
 5. On the Home Screen, long-press → **Edit** → **Add Widget** → **Scriptable** →
-   pick **small** (one square, 4 app slots) or **medium** (a wide rectangle).
-   Add it, then tap the new widget and set **Script** to `Market Rates` and
-   **When Interacting** to **Run Script**.
+   **small**. Add it.
+6. Tap the new widget and set **Script** to `Market Rates` and **When
+   Interacting** to **Run Script**. That second setting is what makes the tap
+   refresh the rates.
 
 No API key is required.
+
+## Refreshing
+
+iOS decides when a widget redraws itself — typically a few times an hour, and it
+throttles apps that ask for more. There is no way for a Scriptable widget to
+refresh itself on demand.
+
+So the `↻` in the corner is a hint, not a button: tapping the widget runs the
+script, which fetches current rates and shows them immediately inside
+Scriptable. That also updates the saved copy the widget reads, so the Home
+Screen tile picks up the new numbers on its next redraw.
+
+If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
+`"fred"` at the top of the script.
 
 ## Where the numbers come from
 
@@ -51,13 +65,14 @@ No API key is required.
 | 4 | On-device cache of the last good values | all four |
 
 Each source is only asked for what the one before it could not supply, so a
-single endpoint changing or going down does not blank the widget. When any tile
-falls back to the cache, the header shows `CACHED` instead of the source name.
+single endpoint changing or going down does not blank the widget. When any rate
+falls back to the cache, the footer says `cached` (the wider sizes show `CACHED`
+in the header).
 
 Treasury yields are not published on weekends or federal holidays, and SOFR is
 published a business day behind. The widget always shows the most recent
-*available* observation rather than a gap, and the footer names both dates
-whenever they differ.
+*available* observation rather than a gap, and names both dates when they
+differ.
 
 ## Settings
 
@@ -67,13 +82,12 @@ All at the top of `MarketRates.js`:
   [fredaccount.stlouisfed.org/apikey](https://fredaccount.stlouisfed.org/apikey)
   the widget uses the official FRED API first and falls back to the sources
   above. Leaving it blank is fine.
+- `TAP_ACTION` — `"refresh"`, `"fred"` or `"none"` (see **Refreshing**).
 - `UP_IS_BAD` — `true` colours rising rates red (a borrower's view); `false`
-  colours them green.
+  colours them green. Only visible on the medium and large sizes.
 - `SHOW_CHANGE` — set to `false` to hide the basis-point move.
-- `TAP_URL` — where tapping the widget goes.
-- `REFRESH_MINUTES` — how often iOS is asked to refresh. iOS treats this as a
-  hint and budgets widget refreshes itself, so expect roughly a few updates an
-  hour, not one exactly every 30 minutes.
+- `REFRESH_MINUTES` — how often iOS is *asked* to refresh; it treats this as a
+  hint.
 
 ## Notes
 

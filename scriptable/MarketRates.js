@@ -1,6 +1,7 @@
 // ===========================================================================
-//  MARKET RATES — Scriptable medium widget
+//  MARKET RATES — Scriptable Home Screen widget
 //  5Y / 7Y / 10Y Treasury + SOFR, for commercial real estate.
+//  Built for the small (2x2) size; medium and large also work.
 //
 //  SETUP: none required. No API key needed — it reads FRED's public CSV
 //  download endpoint. If you ever want to use the official keyed FRED API
@@ -19,8 +20,14 @@ const CONFIG = {
   // false = rising rates shown in green (a trader's view)
   UP_IS_BAD: true,
 
-  // Where tapping the widget takes you.
-  TAP_URL: "https://fred.stlouisfed.org/graph/?id=DGS5,DGS7,DGS10,SOFR",
+  // What tapping the widget does:
+  //   "refresh" — re-runs the script and shows the newest numbers. Needs the
+  //               widget's own "When Interacting" setting to be "Run Script"
+  //               (step 6 of the README).
+  //   "fred"    — opens the FRED chart page in Safari instead.
+  //   "none"    — nothing.
+  TAP_ACTION: "refresh",
+  FRED_URL: "https://fred.stlouisfed.org/graph/?id=DGS5,DGS7,DGS10,SOFR",
 
   // How often iOS is asked to refresh. iOS treats this as a hint.
   REFRESH_MINUTES: 30,
@@ -319,7 +326,7 @@ function writeCache(payload) {
 function metrics(family) {
   if (family === "small") {
     // No room for a header, full names, or the bp change at this size.
-    return { padT: 12, padX: 12, padB: 10, header: 0, label: 11, value: 15, delta: 0, footer: 8, compact: true };
+    return { padT: 13, padX: 13, padB: 11, header: 0, label: 11.5, value: 16, delta: 0, footer: 8.5, compact: true };
   }
   if (family === "large") {
     return { padT: 20, padX: 20, padB: 18, header: 12, label: 17, value: 24, delta: 12, footer: 11 };
@@ -398,7 +405,9 @@ function buildWidget(rates, meta) {
   const M = metrics(family);
 
   const widget = new ListWidget();
-  widget.url = CONFIG.TAP_URL;
+  // With "refresh" the tap is handled by the widget's "When Interacting"
+  // setting, so no URL is attached — setting one would override it.
+  if (CONFIG.TAP_ACTION === "fred") widget.url = CONFIG.FRED_URL;
   widget.setPadding(M.padT, M.padX, M.padB, M.padX);
   widget.backgroundGradient = (() => {
     const g = new LinearGradient();
@@ -446,13 +455,13 @@ function buildWidget(rates, meta) {
   asOf.textColor = COLORS.faint;
   asOf.lineLimit = 1;
   asOf.minimumScaleFactor = 0.7;
-  if (family !== "small") {
-    foot.addSpacer();
-    const stamp = foot.addText(`↻ ${formatClock(meta.refreshedAt)}`);
-    stamp.font = Font.regularSystemFont(M.footer);
-    stamp.textColor = COLORS.faint;
-    stamp.lineLimit = 1;
-  }
+  foot.addSpacer();
+  const stamp = foot.addText(
+    M.compact ? "↻" : `↻ ${formatClock(meta.refreshedAt)}`
+  );
+  stamp.font = Font.regularSystemFont(M.compact ? M.footer + 1.5 : M.footer);
+  stamp.textColor = COLORS.faint;
+  stamp.lineLimit = 1;
 
   widget.refreshAfterDate = new Date(Date.now() + CONFIG.REFRESH_MINUTES * 60 * 1000);
   return widget;
@@ -494,7 +503,9 @@ if (config.runsInWidget) {
       return r ? `${s.label}: ${r.value.toFixed(2)}%  (${formatDay(r.date)})` : `${s.label}: no data`;
     }).join("\n")
   );
-  await widget.presentMedium();
+  // Tapping the widget lands here, so present the square layout it matches.
+  config.widgetFamily = "small";
+  await buildWidget(rates, meta).presentSmall();
 }
 
 Script.complete();
