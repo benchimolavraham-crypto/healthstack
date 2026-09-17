@@ -1,16 +1,30 @@
 # Market Rates — iPhone Home Screen widget
 
-A medium Scriptable widget showing the latest 5Y, 7Y and 10Y Treasury yields and
-SOFR, with the day-over-day move in basis points.
+A Scriptable widget showing the latest 5Y, 7Y and 10Y Treasury yields and SOFR,
+one rate per line, with the day-over-day move in basis points.
+
+Medium size:
 
 ```
-MARKET RATES                       FRED
-5Y UST                     7Y UST
-4.82% +1 bp                4.88% +1 bp
-10Y UST                    SOFR
-4.72% +1 bp                3.64% flat
-UST Sep 15 · SOFR Sep 12          ↻ 7:46 AM
+MARKET RATES                            FRED
+Treasury 5-Year                  +1 bp 4.82%
+Treasury 7-Year                  +1 bp 4.88%
+Treasury 10-Year                 +1 bp 4.72%
+SOFR                              flat 3.64%
+Treasuries Sep 15 · SOFR Sep 12    ↻ 7:46 AM
 ```
+
+Small size — same data, trimmed to fit a single square slot:
+
+```
+5-Year           4.82%
+7-Year           4.88%
+10-Year          4.72%
+SOFR             3.64%
+Sep 15 · SOFR Sep 12
+```
+
+The script detects which size you added and lays itself out accordingly.
 
 ## Install
 
@@ -21,8 +35,9 @@ UST Sep 15 · SOFR Sep 12          ↻ 7:46 AM
    (tap the settings icon at the bottom of the editor).
 4. Tap **▶** once to confirm it pulls live numbers.
 5. On the Home Screen, long-press → **Edit** → **Add Widget** → **Scriptable** →
-   **medium** size. Add it, then tap the new widget and set **Script** to
-   `Market Rates` and **When Interacting** to **Run Script**.
+   pick **small** (one square, 4 app slots) or **medium** (a wide rectangle).
+   Add it, then tap the new widget and set **Script** to `Market Rates` and
+   **When Interacting** to **Run Script**.
 
 No API key is required.
 

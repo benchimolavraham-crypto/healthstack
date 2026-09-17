@@ -30,10 +30,10 @@ const CONFIG = {
 };
 
 const SERIES = [
-  { id: "DGS5", label: "5Y UST" },
-  { id: "DGS7", label: "7Y UST" },
-  { id: "DGS10", label: "10Y UST" },
-  { id: "SOFR", label: "SOFR" },
+  { id: "DGS5", label: "Treasury 5-Year", short: "5-Year" },
+  { id: "DGS7", label: "Treasury 7-Year", short: "7-Year" },
+  { id: "DGS10", label: "Treasury 10-Year", short: "10-Year" },
+  { id: "SOFR", label: "SOFR", short: "SOFR" },
 ];
 
 const TREASURY_IDS = ["DGS5", "DGS7", "DGS10"];
@@ -318,12 +318,13 @@ function writeCache(payload) {
 
 function metrics(family) {
   if (family === "small") {
-    return { padT: 12, padX: 12, padB: 10, header: 9, label: 8, value: 16.5, delta: 7.5, rowGap: 8, headGap: 7, footer: 7.5 };
+    // No room for a header, full names, or the bp change at this size.
+    return { padT: 12, padX: 12, padB: 10, header: 0, label: 11, value: 15, delta: 0, footer: 8, compact: true };
   }
   if (family === "large") {
-    return { padT: 18, padX: 18, padB: 16, header: 12, label: 11, value: 30, delta: 11, rowGap: 22, headGap: 14, footer: 10.5 };
+    return { padT: 20, padX: 20, padB: 18, header: 12, label: 17, value: 24, delta: 12, footer: 11 };
   }
-  return { padT: 13, padX: 15, padB: 11, header: 10.5, label: 9.5, value: 25, delta: 9.5, rowGap: 11, headGap: 9, footer: 9 };
+  return { padT: 12, padX: 14, padB: 10, header: 10.5, label: 13, value: 17.5, delta: 9.5, footer: 9 };
 }
 
 function formatDay(ts) {
@@ -346,47 +347,50 @@ function changeColor(bp) {
   return isBad ? COLORS.bad : COLORS.good;
 }
 
-function addTile(column, series, rate, M) {
-  const cell = column.addStack();
-  cell.layoutVertically();
-  cell.spacing = 1;
+// One rate per line: name on the left, percentage on the right. The change sits
+// left of the percentage so every percentage lands on the same right edge.
+function addRow(widget, series, rate, M) {
+  const row = widget.addStack();
+  row.layoutHorizontally();
+  row.centerAlignContent();
 
-  const label = cell.addText(series.label.toUpperCase());
-  label.font = Font.semiboldSystemFont(M.label);
+  const label = row.addText(M.compact ? series.short : series.label);
+  label.font = Font.regularSystemFont(M.label);
   label.textColor = COLORS.dim;
   label.lineLimit = 1;
+  label.minimumScaleFactor = 0.7;
 
-  const row = cell.addStack();
-  row.layoutHorizontally();
-  row.bottomAlignContent();
-  row.spacing = 4;
+  row.addSpacer();
 
-  const value = row.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
-  value.font = Font.mediumRoundedSystemFont(M.value);
-  value.textColor = COLORS.text;
-  value.lineLimit = 1;
-  value.minimumScaleFactor = 0.7;
-
-  if (CONFIG.SHOW_CHANGE && rate && rate.prev !== null && rate.prev !== undefined) {
+  if (CONFIG.SHOW_CHANGE && !M.compact && rate && rate.prev !== null && rate.prev !== undefined) {
     const bp = Math.round((rate.value - rate.prev) * 100);
     const delta = row.addText(bp === 0 ? "flat" : `${bp > 0 ? "+" : "−"}${Math.abs(bp)} bp`);
-    delta.font = Font.mediumSystemFont(M.delta);
+    delta.font = Font.regularSystemFont(M.delta);
     delta.textColor = changeColor(bp);
     delta.lineLimit = 1;
+    row.addSpacer(M.value * 0.35);
   }
+
+  const value = row.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
+  value.font = Font.semiboldRoundedSystemFont(M.value);
+  value.textColor = COLORS.text;
+  value.lineLimit = 1;
 }
 
 // "Data as of Sep 15" when everything shares a date, otherwise it names both —
 // SOFR is published a business day behind the Treasury curve.
-function footerLeft(rates) {
+function footerLeft(rates, M, stale) {
+  const suffix = stale && M.compact ? " · cached" : "";
   const ust = TREASURY_IDS.map((id) => rates[id]).filter(Boolean).map((r) => r.date);
   const sofr = rates.SOFR ? rates.SOFR.date : null;
   const ustDay = ust.length ? Math.max(...ust) : null;
   if (ustDay && sofr && formatDay(ustDay) !== formatDay(sofr)) {
-    return `UST ${formatDay(ustDay)} · SOFR ${formatDay(sofr)}`;
+    const label = M.compact ? formatDay(ustDay) : `Treasuries ${formatDay(ustDay)}`;
+    return `${label} · SOFR ${formatDay(sofr)}${suffix}`;
   }
   const any = ustDay || sofr;
-  return any ? `Data as of ${formatDay(any)}` : "No data available";
+  if (!any) return "No data available";
+  return M.compact ? `${formatDay(any)}${suffix}` : `Data as of ${formatDay(any)}`;
 }
 
 function buildWidget(rates, meta) {
@@ -408,58 +412,44 @@ function buildWidget(rates, meta) {
     return g;
   })();
 
-  // Header
-  const head = widget.addStack();
-  head.layoutHorizontally();
-  head.centerAlignContent();
-  const title = head.addText("MARKET RATES");
-  title.font = Font.semiboldSystemFont(M.header);
-  title.textColor = COLORS.dim;
-  title.lineLimit = 1;
-  head.addSpacer();
-  const tagText = meta.stale ? "CACHED" : meta.sources.join(" · ");
-  if (tagText) {
-    const tag = head.addText(tagText);
-    tag.font = Font.mediumSystemFont(M.header - 0.5);
-    tag.textColor = meta.stale ? COLORS.warn : COLORS.faint;
-    tag.lineLimit = 1;
+  if (M.header) {
+    const head = widget.addStack();
+    head.layoutHorizontally();
+    head.centerAlignContent();
+    const title = head.addText("MARKET RATES");
+    title.font = Font.semiboldSystemFont(M.header);
+    title.textColor = COLORS.dim;
+    title.lineLimit = 1;
+    head.addSpacer();
+    const tagText = meta.stale ? "CACHED" : meta.sources.join(" · ");
+    if (tagText) {
+      const tag = head.addText(tagText);
+      tag.font = Font.regularSystemFont(M.header - 0.5);
+      tag.textColor = meta.stale ? COLORS.warn : COLORS.faint;
+      tag.lineLimit = 1;
+    }
   }
 
-  widget.addSpacer(M.headGap);
-
-  // 2x2 grid, built as two columns so the two tiles in each row line up.
-  const grid = widget.addStack();
-  grid.layoutHorizontally();
-
-  const left = grid.addStack();
-  left.layoutVertically();
-  addTile(left, SERIES[0], rates[SERIES[0].id], M);
-  left.addSpacer(M.rowGap);
-  addTile(left, SERIES[2], rates[SERIES[2].id], M);
-
-  grid.addSpacer();
-
-  const right = grid.addStack();
-  right.layoutVertically();
-  addTile(right, SERIES[1], rates[SERIES[1].id], M);
-  right.addSpacer(M.rowGap);
-  addTile(right, SERIES[3], rates[SERIES[3].id], M);
-
+  // Flexible spacers between the rows spread them evenly over whatever height
+  // the chosen widget size gives us.
+  for (const series of SERIES) {
+    widget.addSpacer();
+    addRow(widget, series, rates[series.id], M);
+  }
   widget.addSpacer();
 
-  // Footer
   const foot = widget.addStack();
   foot.layoutHorizontally();
   foot.centerAlignContent();
-  const asOf = foot.addText(footerLeft(rates));
-  asOf.font = Font.systemFont(M.footer);
+  const asOf = foot.addText(footerLeft(rates, M, meta.stale));
+  asOf.font = Font.regularSystemFont(M.footer);
   asOf.textColor = COLORS.faint;
   asOf.lineLimit = 1;
-  asOf.minimumScaleFactor = 0.8;
-  foot.addSpacer();
+  asOf.minimumScaleFactor = 0.7;
   if (family !== "small") {
+    foot.addSpacer();
     const stamp = foot.addText(`↻ ${formatClock(meta.refreshedAt)}`);
-    stamp.font = Font.systemFont(M.footer);
+    stamp.font = Font.regularSystemFont(M.footer);
     stamp.textColor = COLORS.faint;
     stamp.lineLimit = 1;
   }
