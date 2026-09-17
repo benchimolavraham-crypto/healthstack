@@ -92,15 +92,28 @@ figure actually posts:
 | New York time | Check every | Why |
 | --- | --- | --- |
 | 8:00–10:00am | 15 min | SOFR posts |
-| 10:00am–4:00pm | 90 min | nothing new expected |
+| 10:00am–4:00pm | 60 min | nothing new expected |
 | 4:00–8:00pm | 15 min | Treasury curve reaches FRED |
 | 8:00pm–8:00am | 120 min | nothing new expected |
 | Weekends | 240 min | no publication |
 
-That is roughly 34 checks on a weekday and 6 on a weekend day, which stays
-inside the refresh budget iOS allows a widget — around 40 to 70 a day, and it
-throttles anything greedier. Set `REFRESH` to a number of minutes to override
-the schedule.
+That is the schedule the widget *asks* for. iOS decides when a widget actually
+wakes, and it often spends a wake-up earlier than requested — so the widget
+fetches on any wake-up it is given, holding back only a second fetch inside
+`MIN_FETCH_GAP_MINUTES` (10 by default). The next wake-up is always measured
+from the last fetch, never from the current draw, so an early wake-up cannot
+push the following one further out.
+
+Set `REFRESH` to a number of minutes to replace the schedule with a fixed one.
+
+**If it only updates when you tap it**, the script is not being woken at all,
+which is a device setting rather than anything in here:
+
+- **Settings → General → Background App Refresh** must be on, and on for
+  Scriptable.
+- **Low Power Mode** suppresses widget refreshes — check the battery icon.
+- A widget on a Home Screen page you rarely open is woken less often than one
+  you look at regularly; iOS learns from use.
 
 `refreshAfterDate` is only a hint; iOS decides when a widget actually redraws.
 The clock on the top row is there to make that visible — if it is moving, the

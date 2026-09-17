@@ -40,10 +40,15 @@ const CONFIG = {
   TAP_ACTION: "refresh",
   FRED_URL: "https://fred.stlouisfed.org/graph/?id=DGS5,DGS7,DGS10,SOFR",
 
-  // How often iOS is asked to refresh, as a hint it is free to ignore.
-  // "auto" aims the checks at the windows when new numbers actually post;
+  // How often iOS is asked to wake the widget, as a hint it is free to ignore.
+  // "auto" aims the wake-ups at the windows when new numbers actually post;
   // a number forces that many minutes instead.
   REFRESH: "auto",
+
+  // iOS grants a widget a limited number of wake-ups and often spends some of
+  // them earlier than asked. Every one of those is a chance to fetch, so the
+  // only thing held back is a second fetch inside this many minutes.
+  MIN_FETCH_GAP_MINUTES: 10,
 
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
@@ -413,7 +418,7 @@ function refreshMinutesFor(weekday, hour) {
   if (weekday === "Sat" || weekday === "Sun") return 240;
   if (hour < 8) return 120;
   if (hour < 10) return 15; // SOFR posts ~8am ET
-  if (hour < 16) return 90;
+  if (hour < 16) return 60;
   if (hour < 20) return 15; // the Treasury curve reaches FRED late afternoon
   return 120;
 }
@@ -631,7 +636,9 @@ function buildWidget(rates, meta) {
     addRow(widget, series, rates[series.id], M, headline);
   }
 
-  widget.refreshAfterDate = new Date(Date.now() + minutesUntilNextCheck() * 60 * 1000);
+  widget.refreshAfterDate = new Date(
+    meta.nextCheckAt || Date.now() + minutesUntilNextCheck() * 60 * 1000
+  );
   return widget;
 }
 
@@ -668,19 +675,27 @@ function metaFromCache(cached, stale) {
 
 async function resolve() {
   const cached = readCache();
-  const dueAt = cached ? cached.savedAt + minutesUntilNextCheck() * 60 * 1000 : 0;
-  const cacheIsCurrent = Boolean(cached) && Date.now() < dueAt;
+  const now = Date.now();
+  const interval = minutesUntilNextCheck() * 60 * 1000;
+  // When the widget would like to be woken next. Measured from the last fetch,
+  // never from this render: an early wake-up must not push the next one out.
+  const dueAt = cached ? cached.savedAt + interval : now;
 
-  // A widget holding a copy that is not due yet renders straight from it. No
-  // network work at all is the only way to be sure of drawing something inside
-  // the budget iOS allows widget code, and the numbers cannot have changed.
-  if (config.runsInWidget && cacheIsCurrent) {
-    return { rates: cached.rates, meta: metaFromCache(cached, false), errors: [] };
+  // iOS often redraws a widget far more often than asked, so a fetch is only
+  // skipped when one has just happened. Waiting out the whole interval meant
+  // throwing away wake-ups that could have carried a fresh figure.
+  const justFetched =
+    Boolean(cached) && now - cached.savedAt < CONFIG.MIN_FETCH_GAP_MINUTES * 60 * 1000;
+
+  if (config.runsInWidget && justFetched) {
+    const meta = metaFromCache(cached, false);
+    meta.nextCheckAt = Math.max(dueAt, now + 60 * 1000);
+    return { rates: cached.rates, meta, errors: [] };
   }
 
   const { rates, sources, errors } = await loadRates(config.runsInWidget && Boolean(cached));
   const freshCount = Object.keys(rates).length;
-  const meta = { sources, stale: false, refreshedAt: new Date() };
+  const meta = { sources, stale: false, refreshedAt: new Date(), nextCheckAt: now + interval };
 
   // Anything a source could not supply falls back to the last good value, so a
   // weak signal degrades to slightly old numbers instead of blank rows.
@@ -692,9 +707,13 @@ async function resolve() {
       }
     }
   }
-  if (freshCount > 0) writeCache({ savedAt: Date.now(), rates, sources });
-  // With nothing fetched at all, the honest timestamp is the cache's.
-  if (freshCount === 0 && cached) meta.refreshedAt = new Date(cached.savedAt);
+  if (freshCount > 0) writeCache({ savedAt: now, rates, sources });
+  if (freshCount === 0) {
+    // Nothing came back: keep the cache's timestamp honest and try again soon
+    // rather than sitting out a whole quiet-hours interval.
+    if (cached) meta.refreshedAt = new Date(cached.savedAt);
+    meta.nextCheckAt = now + 15 * 60 * 1000;
+  }
 
   return { rates, meta, errors };
 }
