@@ -60,7 +60,12 @@ const CONFIG = {
 
   // Safety net: if nothing has refreshed the saved copy in this many hours,
   // the widget fetches anyway rather than showing stale figures forever.
-  WIDGET_STALE_HOURS: 6,
+  WIDGET_STALE_HOURS: 3,
+
+  // Treasuries trade continuously, so the official daily close is hours stale
+  // for most of the day. This layers the live intraday yield on top of it.
+  // Set false to show only the official closes.
+  LIVE_QUOTES: true,
 
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
@@ -72,9 +77,11 @@ const CONFIG = {
 };
 
 const SERIES = [
-  { id: "DGS5", label: "Treasury 5-Year", short: "5-Year" },
-  { id: "DGS7", label: "Treasury 7-Year", short: "7-Year" },
-  { id: "DGS10", label: "Treasury 10-Year", short: "10-Year" },
+  { id: "DGS5", label: "Treasury 5-Year", short: "5-Year", quote: "US5Y" },
+  { id: "DGS7", label: "Treasury 7-Year", short: "7-Year", quote: "US7Y" },
+  { id: "DGS10", label: "Treasury 10-Year", short: "10-Year", quote: "US10Y" },
+  // SOFR has no live quote to have: it is computed from a completed day of
+  // repo transactions and published the next morning.
   { id: "SOFR", label: "SOFR", short: "SOFR" },
 ];
 
@@ -140,6 +147,15 @@ function pad2(n) {
 }
 
 // Parses a numeric cell. FRED writes "." for holidays/missing days.
+// First of several candidate fields that parses as a number.
+function firstNum() {
+  for (let i = 0; i < arguments.length; i++) {
+    const v = num(arguments[i]);
+    if (v !== null) return v;
+  }
+  return null;
+}
+
 function num(raw) {
   if (raw === null || raw === undefined) return null;
   const t = String(raw).trim().replace(/^"|"$/g, "");
@@ -372,6 +388,86 @@ async function fetchSofrNyFed() {
   return toRate(pts);
 }
 
+// 4. Live intraday yields. The Treasury market trades continuously, so the
+// official daily figure above is a close, not a current price. This is the
+// quote service cnbc.com itself calls — undocumented, so it is layered over the
+// official numbers rather than replacing them: when it fails, the closes stand.
+async function fetchLiveYields() {
+  const quoted = SERIES.filter((s) => s.quote);
+  const url =
+    "https://quote.cnbc.com/quote-html-webservice/quote.htm" +
+    `?symbols=${quoted.map((s) => s.quote).join("|")}` +
+    "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
+  const json = await getJson(url);
+
+  // Walk the response for anything carrying a symbol and a last price, rather
+  // than trusting an undocumented shape to keep its nesting.
+  const found = [];
+  const walk = (node, depth) => {
+    if (!node || typeof node !== "object" || depth > 6) return;
+    if (Array.isArray(node)) {
+      for (const child of node) walk(child, depth + 1);
+      return;
+    }
+    if (typeof node.symbol === "string" && node.last !== undefined) found.push(node);
+    for (const key of Object.keys(node)) walk(node[key], depth + 1);
+  };
+  walk(json, 0);
+
+  const idBySymbol = {};
+  for (const s of quoted) idBySymbol[s.quote.toUpperCase()] = s.id;
+
+  const out = {};
+  for (const q of found) {
+    const id = idBySymbol[String(q.symbol).toUpperCase()];
+    if (!id) continue;
+    const value = num(q.last);
+    if (value === null) continue;
+    const at = Number(q.last_time_msec);
+    out[id] = {
+      value,
+      prevClose: firstNum(q.previous_day_closing, q.previousDayClosing, q.prev_close),
+      at: Number.isFinite(at) && at > 1e12 ? at : Date.now(),
+    };
+  }
+  if (!Object.keys(out).length) throw new Error("no usable quotes in response");
+  return out;
+}
+
+// Puts the live yield on the end of that rate's daily history, so the
+// comparison period still measures against real closes: a 1D move is the live
+// yield against yesterday's close, exactly as a quote screen shows it.
+function overlayLive(rates, live) {
+  let applied = 0;
+  for (const s of SERIES) {
+    const quote = live[s.id];
+    if (!quote) continue;
+    const base = rates[s.id];
+    const when = new Date(quote.at);
+    const day = new Date(when.getFullYear(), when.getMonth(), when.getDate()).getTime();
+    const points = base && Array.isArray(base.points) ? base.points.slice() : [];
+
+    // Replace today's close if the daily series already carries it, else extend.
+    if (points.length && points[points.length - 1][0] >= day) {
+      points[points.length - 1] = [day, quote.value];
+    } else {
+      points.push([day, quote.value]);
+    }
+    const prev = points.length > 1 ? points[points.length - 2][1] : quote.prevClose;
+
+    rates[s.id] = {
+      value: quote.value,
+      date: day,
+      prev: prev === undefined ? null : prev,
+      points,
+      live: true,
+      at: quote.at,
+    };
+    applied++;
+  }
+  return applied;
+}
+
 async function loadRates(fredOnly) {
   const rates = {};
   const sources = [];
@@ -404,9 +500,24 @@ async function loadRates(fredOnly) {
       errors.push(`FRED CSV: ${e.message}`);
     }
   }
+  // The live layer goes on last, over whatever the official sources returned,
+  // so a failure here costs nothing but the intraday move.
+  const live = async () => {
+    if (!CONFIG.LIVE_QUOTES) return;
+    try {
+      const applied = overlayLive(rates, await fetchLiveYields());
+      if (applied && !sources.includes("CNBC")) sources.push("CNBC");
+    } catch (e) {
+      errors.push(`Live quotes: ${e.message}`);
+    }
+  };
+
   // Each extra source is another sequential request. A widget that already
   // has a saved copy to fall back on is better off stopping here.
-  if (fredOnly) return { rates, sources, errors };
+  if (fredOnly) {
+    await live();
+    return { rates, sources, errors };
+  }
 
   if (TREASURY_IDS.some((id) => !rates[id])) {
     try {
@@ -423,6 +534,7 @@ async function loadRates(fredOnly) {
       errors.push(`NY Fed: ${e.message}`);
     }
   }
+  await live();
 
   return { rates, sources, errors };
 }
@@ -556,7 +668,7 @@ function formatClock(date) {
 
 // Rising rates cost a borrower money, so up is the red one by default.
 function changeColor(bp) {
-  if (bp === null || bp === 0) return COLORS.faint;
+  if (bp === null || Math.abs(bp) < 0.05) return COLORS.faint;
   const isBad = CONFIG.UP_IS_BAD ? bp > 0 : bp < 0;
   return isBad ? COLORS.bad : COLORS.good;
 }
@@ -566,13 +678,18 @@ function changeColor(bp) {
 // period is spelled out on every row: the move means nothing without it.
 function moveText(rate, bp, label) {
   if (bp === null) return " "; // keeps every row the same height
-  if (bp === 0) return `flat · ${label}`;
+  if (Math.abs(bp) < 0.05) return `flat · ${label}`;
   const arrow = bp > 0 ? "▲" : "▼";
+  const size = Math.abs(bp);
   if (CONFIG.CHANGE_UNIT === "pct") {
     const basis = changeBasis(rate);
-    return `${arrow} ${Math.abs(rate.value - basis.ref).toFixed(2)}% · ${label}`;
+    const move = Math.abs(rate.value - basis.ref);
+    return `${arrow} ${move.toFixed(rate.live ? 3 : 2)}% · ${label}`;
   }
-  return `${arrow} ${Math.abs(bp)} bp · ${label}`;
+  // Intraday moves are often a fraction of a basis point, and rounding half a
+  // point up to a whole one is the kind of overstatement this is meant to avoid.
+  const shown = size < 1 ? size.toFixed(1) : String(Math.round(size));
+  return `${arrow} ${shown} bp · ${label}`;
 }
 
 // The newest observation date across the four rates — the widget's "as of".
@@ -610,7 +727,9 @@ function addRow(widget, series, rate, M, headline) {
   figures.layoutVertically();
   figures.spacing = 0;
 
-  const value = figures.addText(rate ? `${rate.value.toFixed(2)}%` : "—");
+  const value = figures.addText(
+    rate ? `${rate.value.toFixed(rate.live ? 3 : 2)}%` : "—"
+  );
   value.font = Font.boldRoundedSystemFont(M.value);
   value.textColor = COLORS.text;
   value.lineLimit = 1;
@@ -618,7 +737,7 @@ function addRow(widget, series, rate, M, headline) {
 
   if (CONFIG.SHOW_CHANGE) {
     const basis = changeBasis(rate);
-    const bp = rate && basis.ref !== null ? Math.round((rate.value - basis.ref) * 100) : null;
+    const bp = rate && basis.ref !== null ? (rate.value - basis.ref) * 100 : null;
     const move = figures.addText(moveText(rate, bp, basis.label));
     move.font = Font.mediumSystemFont(M.change);
     move.textColor = changeColor(bp);
@@ -660,8 +779,17 @@ function buildWidget(rates, meta) {
     title.lineLimit = 1;
     head.addSpacer();
   }
+  // Outside trading hours the "live" quote is just the last print, so it is
+  // only called live while it is actually recent.
+  const isLive = SERIES.some(
+    (x) =>
+      rates[x.id] &&
+      rates[x.id].live &&
+      Date.now() - rates[x.id].at < 45 * 60 * 1000
+  );
   const asOf = head.addText(
-    (headline ? formatDay(headline) : "No data") + (meta.stale ? " · cached" : "")
+    (isLive ? "LIVE" : headline ? formatDay(headline) : "No data") +
+      (meta.stale ? " · cached" : "")
   );
   asOf.font = Font.mediumSystemFont(M.date);
   asOf.textColor = meta.stale ? COLORS.warn : COLORS.dim;
@@ -818,7 +946,9 @@ if (config.runsInWidget) {
   console.log(
     SERIES.map((s) => {
       const r = rates[s.id];
-      return r ? `${s.label}: ${r.value.toFixed(2)}%  (${formatDay(r.date)})` : `${s.label}: no data`;
+      if (!r) return `${s.label}: no data`;
+      const when = r.live ? `live ${formatClock(new Date(r.at))}` : formatDay(r.date);
+      return `${s.label}: ${r.value.toFixed(r.live ? 3 : 2)}%  (${when})`;
     }).join("\n")
   );
   if (errors.length) console.log(`\nSources that failed:\n${errors.join("\n")}`);

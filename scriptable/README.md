@@ -103,44 +103,35 @@ turn *off* **Ask Before Running**) → **Done**.
 The script detects it is being run this way and shows nothing on screen, so
 each automation completes silently.
 
-**Recommended, four automations (New York time):**
+**Recommended, five automations (New York time):**
 
 | Time | Why |
 | --- | --- |
 | 8:45am | SOFR posts around 8:00am |
+| 10:30am | mid-morning |
 | 12:30pm | midday |
+| 2:30pm | mid-afternoon |
 | 5:15pm | the Treasury curve is published mid-afternoon |
-| 7:00pm | catches FRED's evening update |
 
 ### How often is worth automating
 
-Each series publishes **once per business day**: SOFR around 8:00am New York
-time for the previous business day, and the Treasury curve mid-afternoon,
-reaching FRED in the evening. Nothing moves in between, so a run at 10:15am
-returns the same figures as the one at 10:00am.
+Treasuries trade continuously, so the 5Y, 7Y and 10Y yields move all day and a
+run an hour apart returns a genuinely different figure. More automations do buy
+something here. SOFR does not move: it is computed from a completed day of repo
+transactions and published the following morning, so it changes once per
+business day whatever the schedule.
 
-Running more often is cheap — one small HTTPS request and a few milliseconds of
-parsing — but it buys nothing. The four times above already bracket both
-publication moments. Anything beyond that is fetching a number that cannot have
-changed.
+The limit is Shortcuts, not cost. A run is one small request and a few
+milliseconds of parsing, but a **Time of Day** automation fires at one specific
+time with no repeat interval — hourly across a working day is twelve
+automations to create by hand, and every fifteen minutes would be ninety-six.
+Beyond that, the widget only redraws when iOS decides to, at best every 15-60
+minutes, so refreshing faster than that is invisible on the Home Screen.
 
-Two practical limits if you want to go further anyway:
-
-- Shortcuts automations fire at **one specific time each**, with no repeat
-  interval. Hourly across a working day is twelve automations to create by
-  hand; every fifteen minutes would be ninety-six.
-- The widget still only redraws when iOS decides to, which is at best every
-  15-60 minutes. Refreshing the data faster than the tile can redraw it is
-  invisible.
-
-Back-to-back scheduled runs inside `MIN_FETCH_GAP_MINUTES` (10) skip the
-network and reuse the saved copy, so an aggressive schedule cannot hammer
-anything. Tapping the script always fetches — that is a person asking for the
-newest figure.
-
-One automation worth adding whatever schedule you choose: trigger **When I
-open** an app you use constantly. It refreshes the data at the moment you
-actually pick up the phone, which no fixed schedule can do.
+Hourly through the trading day is the sensible ceiling. Back-to-back scheduled
+runs inside `MIN_FETCH_GAP_MINUTES` (10) reuse the saved copy rather than
+re-fetching, so a dense schedule cannot hammer anything. Tapping the script
+always fetches — that is a person asking for the current yield.
 
 ### Refresh schedule the widget asks for
 
@@ -188,8 +179,8 @@ In this log: 2 automation run(s), 1 widget wake-up(s).
 - `app` lines are your own taps.
 - `widget` lines mean iOS is waking the widget. None at all means it is not,
   and the steps above apply.
-- Treasury yields and SOFR change once a business day, so the rates sitting
-  still is normal. The Updated clock is what should move.
+- With live quotes on, the Treasury yields move through the day. SOFR changes
+  once a business day, so that row sitting still is normal.
 
 ## Where the numbers come from
 
@@ -198,7 +189,25 @@ In this log: 2 automation run(s), 1 widget wake-up(s).
 | 1 | FRED public CSV download (`DGS5`, `DGS7`, `DGS10`, `SOFR`) | all four |
 | 2 | U.S. Treasury daily yield curve CSV | 5Y / 7Y / 10Y |
 | 3 | New York Fed SOFR API | SOFR |
-| 4 | On-device cache of the last good values | all four |
+| 4 | CNBC quote service — **live intraday yields** | 5Y / 7Y / 10Y |
+| 5 | On-device cache of the last good values | all four |
+
+Sources 1-3 give the official daily closes. Source 4 then lays the live
+intraday yield on top of them: the Treasury market trades continuously, so the
+official figure is a close, not a current price. It is the quote service
+cnbc.com itself calls, which is undocumented and could change without notice —
+so it is a layer, never a replacement. If it fails, the closes stand and the
+widget carries on.
+
+Because the live yield is appended to that rate's daily history, a `1D` move is
+the live yield against *yesterday's close*, exactly as a quote screen shows it.
+A live rate is displayed to three decimals, since at two it would barely appear
+to move, and a sub-basis-point move is shown as such (`▲ 0.5 bp`) rather than
+rounded up to a whole one. The top row reads `LIVE` while the quote is recent
+and falls back to the date once it is not — after hours, a "live" quote is just
+the last print.
+
+SOFR has no live quote to have, so it stays on the official daily figure.
 
 Each source is only asked for what the one before it could not supply, so a
 single endpoint changing or going down does not blank the widget. When any rate
@@ -225,6 +234,8 @@ All at the top of `MarketRates.js`:
   `"pct"` shows the same move as `▲ 0.12%`.
 - `CHANGE_PERIOD` — `"1d"`, `"1w"` or `"1m"` (see above).
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
+- `LIVE_QUOTES` — `false` shows only the official daily closes, no intraday
+  layer.
 - `WIDGET_FETCH` — `false` keeps all network work out of the widget (see
   **Keeping it updated**); `WIDGET_STALE_HOURS` is the safety net that lets it
   fetch anyway once the saved copy is that old.
