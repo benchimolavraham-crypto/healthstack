@@ -50,6 +50,18 @@ const CONFIG = {
   // only thing held back is a second fetch inside this many minutes.
   MIN_FETCH_GAP_MINUTES: 10,
 
+  // Apple: a widget whose script times out or crashes has its refresh priority
+  // cut, and iOS can stop reloading it altogether. So by default the widget
+  // never touches the network — it draws the saved copy and finishes in
+  // milliseconds, which is the behaviour iOS keeps rewarding with wake-ups.
+  // The fetching is done by a Shortcuts automation running this same script,
+  // which gets the app's full budget (see "Keeping it updated" in the README).
+  WIDGET_FETCH: false,
+
+  // Safety net: if nothing has refreshed the saved copy in this many hours,
+  // the widget fetches anyway rather than showing stale figures forever.
+  WIDGET_STALE_HOURS: 6,
+
   CACHE_FILE: "market-rates-cache.json",
   TIMEOUT_SECONDS: 15,
   // A widget is killed before the app would be, so it gets a tighter budget and
@@ -706,17 +718,23 @@ async function resolve() {
   // never from this render: an early wake-up must not push the next one out.
   const dueAt = cached ? cached.savedAt + interval : now;
 
-  // iOS often redraws a widget far more often than asked, so a fetch is only
-  // skipped when one has just happened. Waiting out the whole interval meant
-  // throwing away wake-ups that could have carried a fresh figure.
-  const justFetched =
-    Boolean(cached) && now - cached.savedAt < CONFIG.MIN_FETCH_GAP_MINUTES * 60 * 1000;
+  const ageMs = cached ? now - cached.savedAt : Infinity;
+  // The saved copy has gone unrefreshed long enough that showing it would be
+  // worse than risking a fetch from inside the widget.
+  const goneStale = ageMs > CONFIG.WIDGET_STALE_HOURS * 60 * 60 * 1000;
+  const justFetched = ageMs < CONFIG.MIN_FETCH_GAP_MINUTES * 60 * 1000;
+  const widgetMayFetch = goneStale || (CONFIG.WIDGET_FETCH && !justFetched);
 
-  if (config.runsInWidget && justFetched) {
+  if (config.runsInWidget && !widgetMayFetch) {
     const meta = metaFromCache(cached, false);
     meta.nextCheckAt = Math.max(dueAt, now + 60 * 1000);
-    const age = Math.round((now - cached.savedAt) / 60000);
-    return { rates: cached.rates, meta, errors: [], outcome: `skipped, fetched ${age}m ago` };
+    const age = Math.round(ageMs / 60000);
+    return {
+      rates: cached.rates,
+      meta,
+      errors: [],
+      outcome: `drew saved copy, ${age}m old (no network in widget)`,
+    };
   }
 
   const { rates, sources, errors } = await loadRates(config.runsInWidget && Boolean(cached));
@@ -803,9 +821,12 @@ if (config.runsInWidget) {
       ? `\niOS has woken the widget ${wakes.length} time(s) in this log.`
       : "\niOS has NOT woken the widget yet — every run here was a tap."
   );
-  // Tapping the widget lands here, so present the square layout it matches.
-  config.widgetFamily = "small";
-  await safeWidget(rates, meta).presentSmall();
+  // Only the app has a screen to present on. Run from a Shortcuts automation
+  // there is nobody to dismiss the sheet, and presenting one would hang it.
+  if (config.runsInApp) {
+    config.widgetFamily = "small";
+    await safeWidget(rates, meta).presentSmall();
+  }
 }
 
 Script.complete();

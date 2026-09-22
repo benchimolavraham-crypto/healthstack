@@ -75,19 +75,40 @@ every row with the period it used. If it is ever working from a saved copy that
 predates that history, it reports the period it actually had rather than the one
 you asked for.
 
-## Refreshing
+## Keeping it updated
 
-Neither number moves during the day:
+Apple's own guidance is the thing to understand here: a widget whose script
+times out or crashes has its refresh priority cut, and iOS can stop reloading
+it altogether. A widget that fetches over the network in the background is
+therefore betting its refresh budget on every draw.
 
-- **Treasury yields** are a single daily figure derived from the ~3:30pm ET
-  close. Treasury publishes them late afternoon and they reach FRED by early
-  evening ET. One new value per business day.
-- **SOFR** is one figure per business day, published by the New York Fed around
-  8:00am ET for the *previous* business day.
+So the work is split:
 
-So there is nothing to stream — checking every minute would return the same
-number all day. Instead the widget aims its checks at the two windows when a new
-figure actually posts:
+- **The widget never touches the network.** It draws the saved copy and
+  finishes in milliseconds, which is the behaviour iOS keeps rewarding with
+  wake-ups. (`WIDGET_FETCH: true` restores fetching from inside the widget;
+  either way it fetches anyway if the saved copy is older than
+  `WIDGET_STALE_HOURS`, so it can never be stuck forever.)
+- **A Shortcuts automation refreshes the data**, by running this same script a
+  few times a day. It runs with the app's full time budget and none of a
+  widget's constraints, so it is the part that reliably works.
+
+### Setting up the automation
+
+Do this three times — once each for around 8:30am, 12:30pm and 5:00pm, which
+brackets both moments new figures post.
+
+1. Open **Shortcuts** → **Automation** tab → **+**
+2. Choose **Time of Day**, set the time, choose **Daily**, tap **Next**
+3. Search for **Scriptable**, tap **Run Script**
+4. Tap **Script** and pick this script
+5. Set it to **Run Immediately** (older iOS: turn *off* **Ask Before Running**)
+6. **Done**
+
+The script detects it is being run this way and skips showing anything on
+screen, so the automation completes silently.
+
+### Refresh schedule the widget asks for
 
 | New York time | Wake-up asked for |
 | --- | --- |
@@ -96,57 +117,43 @@ figure actually posts:
 | Weekend | every 3 hours |
 
 That is about 44 wake-ups on a weekday, inside the 40-70 iOS allows before it
-throttles. Both publication windows fall inside the working day, so a new figure
-shows up within about twenty minutes of posting.
-
-That is the schedule the widget *asks* for. iOS decides when a widget actually
-wakes, and it often spends a wake-up earlier than requested — so the widget
-fetches on any wake-up it is given, holding back only a second fetch inside
-`MIN_FETCH_GAP_MINUTES` (10 by default). The next wake-up is always measured
-from the last fetch, never from the current draw, so an early wake-up cannot
-push the following one further out.
+throttles. It is a request, not a promise: iOS decides when a widget actually
+redraws, and there is no API for a Scriptable widget to force it.
 
 Set `REFRESH` to a number of minutes to replace the schedule with a fixed one.
 
-### If the Updated time is stuck
+### If it still will not update on its own
 
-A widget cannot be watched while it runs, so it keeps a log. Open the script in
-Scriptable, tap **▶**, close the preview, and read the console underneath:
+iOS may already have deprioritised the widget from earlier failures. A fresh
+widget gets a fresh budget:
+
+1. Remove the widget from the Home Screen.
+2. Restart the phone.
+3. Add the widget again and set **When Interacting** to **Run Script**.
+4. Check **Settings → General → Background App Refresh** is on, and on for
+   Scriptable, and that **Low Power Mode** is off.
+
+With the automation in place the rates stay current regardless, since every
+redraw the widget does get shows data the automation already refreshed.
+
+### Reading the run log
+
+Every run leaves a line behind. Open the script, tap **▶**, close the preview,
+and read the console underneath:
 
 ```
 --- recent runs (newest last) ---
-Sep 17, 10:45 AM  widget fetched 4/4 from FRED
-Sep 17, 11:05 AM  widget NO DATA — FRED CSV: The request timed out.
-Sep 17, 11:26 AM  app    fetched 4/4 from FRED
+Sep 21, 8:30 AM  app    fetched 4/4 from FRED
+Sep 21, 9:14 AM  widget drew saved copy, 44m old (no network in widget)
 
-iOS has woken the widget 3 time(s) in this log.
+iOS has woken the widget 1 time(s) in this log.
 ```
 
-- Lines marked **widget** are iOS waking it on its own. If there are none, the
-  script is never being run in the background — check **Settings → General →
-  Background App Refresh** (on, and on for Scriptable) and that **Low Power
-  Mode** is off. A widget on a Home Screen page you rarely open is also woken
-  less often.
-- **widget** lines reading **NO DATA** mean it is being woken but the request is
-  not getting through in the time a widget is allowed. Raise
-  `WIDGET_TIMEOUT_SECONDS`.
-- **widget** lines reading **fetched** mean it is working. Treasury yields and
-  SOFR only change once a business day, so the rates themselves staying put is
-  normal — the Updated clock is the thing that should move.
-
-`refreshAfterDate` is only a hint; iOS decides when a widget actually redraws.
-The clock on the top row is there to make that visible — if it is moving, the
-schedule is working.
-
-iOS does not give Scriptable widgets real controls, so there is no refresh
-button to add — the whole tile is a single tap target. With **When Interacting**
-set to **Run Script**, a tap anywhere opens Scriptable, fetches current rates
-and shows them, and updates the saved copy so the tile catches up on its next
-redraw. With **Open App** — Scriptable's default — a tap only opens the app and
-nothing refreshes.
-
-If you would rather the tap open the FRED chart page, set `TAP_ACTION` to
-`"fred"` at the top of the script.
+- `app` lines at your automation times mean the automation is working.
+- `widget` lines mean iOS is waking the widget. None at all means it is not,
+  and the steps above apply.
+- Treasury yields and SOFR change once a business day, so the rates sitting
+  still is normal. The Updated clock is what should move.
 
 ## Where the numbers come from
 
@@ -182,6 +189,9 @@ All at the top of `MarketRates.js`:
   `"pct"` shows the same move as `▲ 0.12%`.
 - `CHANGE_PERIOD` — `"1d"`, `"1w"` or `"1m"` (see above).
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
+- `WIDGET_FETCH` — `false` keeps all network work out of the widget (see
+  **Keeping it updated**); `WIDGET_STALE_HOURS` is the safety net that lets it
+  fetch anyway once the saved copy is that old.
 
 ## If the widget is blank
 
