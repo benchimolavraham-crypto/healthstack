@@ -59,8 +59,11 @@ const CONFIG = {
   WIDGET_FETCH: false,
 
   // Safety net: if nothing has refreshed the saved copy in this many hours,
-  // the widget fetches anyway rather than showing stale figures forever.
-  WIDGET_STALE_HOURS: 3,
+  // the widget fetches anyway rather than showing stale figures forever. At one
+  // hour this is a real fallback rather than a last resort — a widget with no
+  // automation behind it still refreshes itself roughly hourly, at one request
+  // per hour rather than one per draw, which is what got it deprioritised.
+  WIDGET_STALE_HOURS: 1,
 
   // Treasuries trade continuously, so the official daily close is hours stale
   // for most of the day. This layers the live intraday yield on top of it.
