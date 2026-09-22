@@ -95,18 +95,52 @@ So the work is split:
 
 ### Setting up the automation
 
-Do this three times — once each for around 8:30am, 12:30pm and 5:00pm, which
-brackets both moments new figures post.
+For each time below: **Shortcuts** → **Automation** tab → **+** → **Time of
+Day** → set the time → **Daily** → **Next** → search **Scriptable** → **Run
+Script** → tap **Script** and pick this one → **Run Immediately** (older iOS:
+turn *off* **Ask Before Running**) → **Done**.
 
-1. Open **Shortcuts** → **Automation** tab → **+**
-2. Choose **Time of Day**, set the time, choose **Daily**, tap **Next**
-3. Search for **Scriptable**, tap **Run Script**
-4. Tap **Script** and pick this script
-5. Set it to **Run Immediately** (older iOS: turn *off* **Ask Before Running**)
-6. **Done**
+The script detects it is being run this way and shows nothing on screen, so
+each automation completes silently.
 
-The script detects it is being run this way and skips showing anything on
-screen, so the automation completes silently.
+**Recommended, four automations (New York time):**
+
+| Time | Why |
+| --- | --- |
+| 8:45am | SOFR posts around 8:00am |
+| 12:30pm | midday |
+| 5:15pm | the Treasury curve is published mid-afternoon |
+| 7:00pm | catches FRED's evening update |
+
+### How often is worth automating
+
+Each series publishes **once per business day**: SOFR around 8:00am New York
+time for the previous business day, and the Treasury curve mid-afternoon,
+reaching FRED in the evening. Nothing moves in between, so a run at 10:15am
+returns the same figures as the one at 10:00am.
+
+Running more often is cheap — one small HTTPS request and a few milliseconds of
+parsing — but it buys nothing. The four times above already bracket both
+publication moments. Anything beyond that is fetching a number that cannot have
+changed.
+
+Two practical limits if you want to go further anyway:
+
+- Shortcuts automations fire at **one specific time each**, with no repeat
+  interval. Hourly across a working day is twelve automations to create by
+  hand; every fifteen minutes would be ninety-six.
+- The widget still only redraws when iOS decides to, which is at best every
+  15-60 minutes. Refreshing the data faster than the tile can redraw it is
+  invisible.
+
+Back-to-back scheduled runs inside `MIN_FETCH_GAP_MINUTES` (10) skip the
+network and reuse the saved copy, so an aggressive schedule cannot hammer
+anything. Tapping the script always fetches — that is a person asking for the
+newest figure.
+
+One automation worth adding whatever schedule you choose: trigger **When I
+open** an app you use constantly. It refreshes the data at the moment you
+actually pick up the phone, which no fixed schedule can do.
 
 ### Refresh schedule the widget asks for
 
@@ -143,13 +177,15 @@ and read the console underneath:
 
 ```
 --- recent runs (newest last) ---
-Sep 21, 8:30 AM  app    fetched 4/4 from FRED
-Sep 21, 9:14 AM  widget drew saved copy, 44m old (no network in widget)
+Sep 21, 8:45 AM  auto   fetched 4/4 from FRED
+Sep 21, 9:14 AM  widget drew saved copy, 29m old (no network in widget)
+Sep 21, 12:30 PM auto   fetched 4/4 from FRED
 
-iOS has woken the widget 1 time(s) in this log.
+In this log: 2 automation run(s), 1 widget wake-up(s).
 ```
 
-- `app` lines at your automation times mean the automation is working.
+- `auto` lines at your automation times mean the automations are working.
+- `app` lines are your own taps.
 - `widget` lines mean iOS is waking the widget. None at all means it is not,
   and the steps above apply.
 - Treasury yields and SOFR change once a business day, so the rates sitting

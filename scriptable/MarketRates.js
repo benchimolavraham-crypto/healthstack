@@ -122,6 +122,15 @@ function historyDays() {
   return days >= 30 ? 55 : days >= 7 ? 25 : 20;
 }
 
+// Three ways this script runs, and they want different things: a widget draw
+// must be instant, a tap is someone asking for the newest figure right now,
+// and a Shortcuts automation is a scheduled background refresh.
+function runContext() {
+  if (config.runsInWidget) return "widget";
+  if (config.runsInApp) return "app";
+  return "auto";
+}
+
 function timeoutSeconds() {
   return config.runsInWidget ? CONFIG.WIDGET_TIMEOUT_SECONDS : CONFIG.TIMEOUT_SECONDS;
 }
@@ -506,7 +515,7 @@ function recordRun(outcome) {
     const runs = Array.isArray(payload.runs) ? payload.runs : [];
     runs.push({
       t: Date.now(),
-      ctx: config.runsInWidget ? "widget" : "app",
+      ctx: runContext(),
       outcome: String(outcome).slice(0, 90),
     });
     payload.runs = runs.slice(-12);
@@ -718,6 +727,7 @@ async function resolve() {
   // never from this render: an early wake-up must not push the next one out.
   const dueAt = cached ? cached.savedAt + interval : now;
 
+  const ctx = runContext();
   const ageMs = cached ? now - cached.savedAt : Infinity;
   // The saved copy has gone unrefreshed long enough that showing it would be
   // worse than risking a fetch from inside the widget.
@@ -725,7 +735,16 @@ async function resolve() {
   const justFetched = ageMs < CONFIG.MIN_FETCH_GAP_MINUTES * 60 * 1000;
   const widgetMayFetch = goneStale || (CONFIG.WIDGET_FETCH && !justFetched);
 
-  if (config.runsInWidget && !widgetMayFetch) {
+  // A scheduled run that lands right after another one has nothing to collect.
+  // Tapping is a person asking for the newest figure, so it always fetches.
+  if (ctx === "auto" && justFetched) {
+    const meta = metaFromCache(cached, false);
+    meta.nextCheckAt = Math.max(dueAt, now + 60 * 1000);
+    const age = Math.round(ageMs / 60000);
+    return { rates: cached.rates, meta, errors: [], outcome: `skipped, fetched ${age}m ago` };
+  }
+
+  if (ctx === "widget" && !widgetMayFetch) {
     const meta = metaFromCache(cached, false);
     meta.nextCheckAt = Math.max(dueAt, now + 60 * 1000);
     const age = Math.round(ageMs / 60000);
@@ -815,11 +834,11 @@ if (config.runsInWidget) {
       ? runs.map((r) => `${stamp.string(new Date(r.t))}  ${r.ctx.padEnd(6)} ${r.outcome}`).join("\n")
       : "(none recorded yet)"
   );
-  const wakes = runs.filter((r) => r.ctx === "widget");
+  const wakes = runs.filter((r) => r.ctx === "widget").length;
+  const autos = runs.filter((r) => r.ctx === "auto").length;
   console.log(
-    wakes.length
-      ? `\niOS has woken the widget ${wakes.length} time(s) in this log.`
-      : "\niOS has NOT woken the widget yet — every run here was a tap."
+    `\nIn this log: ${autos} automation run(s), ${wakes} widget wake-up(s).` +
+      (autos ? "" : "\nNo automation runs yet — see 'Keeping it updated' in the README.")
   );
   // Only the app has a screen to present on. Run from a Shortcuts automation
   // there is nobody to dismiss the sheet, and presenting one would hang it.
