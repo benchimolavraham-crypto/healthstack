@@ -830,8 +830,10 @@ function buildWidget(rates, meta) {
     title.lineLimit = 1;
     head.addSpacer();
   }
-  // Outside trading hours the "live" quote is just the last print, so it is
-  // only called live while it is actually recent.
+  // A widget cannot stream: it takes a snapshot whenever it fetches. So this
+  // says what kind of price it is — a market price rather than a close — and
+  // leaves the clock beside it to say how old that snapshot is. Calling it
+  // "live" implied a ticking number the platform cannot give.
   const isLive = SERIES.some(
     (x) =>
       rates[x.id] &&
@@ -839,7 +841,7 @@ function buildWidget(rates, meta) {
       Date.now() - rates[x.id].at < 45 * 60 * 1000
   );
   const asOf = head.addText(
-    (isLive ? "LIVE" : headline ? `CLOSE ${formatDay(headline)}` : "No data") +
+    (isLive ? "MARKET" : headline ? `CLOSE ${formatDay(headline)}` : "No data") +
       (meta.stale ? " · cached" : "")
   );
   asOf.font = Font.mediumSystemFont(M.date);
