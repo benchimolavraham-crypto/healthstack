@@ -400,7 +400,7 @@ async function fetchLiveYields() {
   const url =
     "https://quote.cnbc.com/quote-html-webservice/quote.htm" +
     `?symbols=${quoted.map((s) => s.quote).join("|")}` +
-    "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
+    "&requestMethod=quick&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
   const json = await getJson(url);
 
   // Walk the response for anything carrying a symbol and a last price, rather
@@ -429,11 +429,50 @@ async function fetchLiveYields() {
     const at = Number(q.last_time_msec);
     out[id] = {
       value,
-      prevClose: firstNum(q.previous_day_closing, q.previousDayClosing, q.prev_close),
+      prevClose: (() => {
+        const stated = firstNum(q.previous_day_closing, q.previousDayClosing, q.prev_close);
+        if (stated !== null) return stated;
+        // Not every response carries the close, but change is standard.
+        const change = num(q.change);
+        return change === null ? null : value - change;
+      })(),
       at: Number.isFinite(at) && at > 1e12 ? at : Date.now(),
     };
   }
   if (!Object.keys(out).length) throw new Error("no usable quotes in response");
+  return out;
+}
+
+// 4b. Yahoo's chart endpoint, as a second live source. It has no 7-year
+// instrument, so that rate keeps its official close and shows its own date —
+// partly live and visibly so beats silently stale.
+async function fetchYahooYields() {
+  const symbols = { DGS5: "%5EFVX", DGS10: "%5ETNX" };
+  const out = {};
+  for (const id of Object.keys(symbols)) {
+    try {
+      const json = await getJson(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${symbols[id]}?range=1d&interval=5m`
+      );
+      const result = json && json.chart && json.chart.result && json.chart.result[0];
+      const meta = result && result.meta;
+      if (!meta) continue;
+      let value = num(meta.regularMarketPrice);
+      if (value === null) continue;
+      let prevClose = firstNum(meta.chartPreviousClose, meta.previousClose);
+      // These tickers have historically been quoted at ten times the yield. No
+      // Treasury yield reaches 20%, so that scale is unambiguous when it happens.
+      if (value > 20) {
+        value = value / 10;
+        if (prevClose !== null) prevClose = prevClose / 10;
+      }
+      const at = Number(meta.regularMarketTime) * 1000;
+      out[id] = { value, prevClose, at: Number.isFinite(at) && at > 1e12 ? at : Date.now() };
+    } catch (e) {
+      // try the next symbol
+    }
+  }
+  if (!Object.keys(out).length) throw new Error("no usable quotes from Yahoo");
   return out;
 }
 
@@ -507,11 +546,20 @@ async function loadRates(fredOnly) {
   // so a failure here costs nothing but the intraday move.
   const live = async () => {
     if (!CONFIG.LIVE_QUOTES) return;
+    let got = 0;
     try {
-      const applied = overlayLive(rates, await fetchLiveYields());
-      if (applied && !sources.includes("CNBC")) sources.push("CNBC");
+      got = overlayLive(rates, await fetchLiveYields());
+      if (got && !sources.includes("CNBC")) sources.push("CNBC");
     } catch (e) {
-      errors.push(`Live quotes: ${e.message}`);
+      errors.push(`Live quotes (CNBC): ${e.message}`);
+    }
+    // Only reach for the second source if the first left rates on their close.
+    if (got >= TREASURY_IDS.length) return;
+    try {
+      const applied = overlayLive(rates, await fetchYahooYields());
+      if (applied && !sources.includes("Yahoo")) sources.push("Yahoo");
+    } catch (e) {
+      errors.push(`Live quotes (Yahoo): ${e.message}`);
     }
   };
 
@@ -791,7 +839,7 @@ function buildWidget(rates, meta) {
       Date.now() - rates[x.id].at < 45 * 60 * 1000
   );
   const asOf = head.addText(
-    (isLive ? "LIVE" : headline ? formatDay(headline) : "No data") +
+    (isLive ? "LIVE" : headline ? `CLOSE ${formatDay(headline)}` : "No data") +
       (meta.stale ? " · cached" : "")
   );
   asOf.font = Font.mediumSystemFont(M.date);
