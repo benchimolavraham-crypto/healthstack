@@ -713,12 +713,12 @@ function metrics(family) {
   // Every size has the same height to work with — only the width changes — so
   // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    return { padT: 7, padX: 11, padB: 7, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
+    return { padT: 12, padX: 11, padB: 12, cornerInset: 4, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 16, padX: 18, padB: 16, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
+    return { padT: 16, padX: 18, padB: 16, cornerInset: 2, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
   }
-  return { padT: 8, padX: 14, padB: 8, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
+  return { padT: 12, padX: 14, padB: 12, cornerInset: 3, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
 }
 
 function formatDay(ts) {
@@ -857,6 +857,8 @@ function buildWidget(rates, meta) {
   const head = widget.addStack();
   head.layoutHorizontally();
   head.centerAlignContent();
+  // The ends of this row sit in the widget's rounded corners, which clip them.
+  head.setPadding(0, M.cornerInset, 0, M.cornerInset);
   if (M.header) {
     const title = head.addText("MARKET RATES");
     title.font = Font.semiboldSystemFont(M.header);
@@ -905,6 +907,8 @@ function buildWidget(rates, meta) {
       const row = widget.addStack();
       row.layoutHorizontally();
       row.centerAlignContent();
+      // Same corner clearance as the top row.
+      row.setPadding(0, M.cornerInset, 0, M.cornerInset);
       const label = row.addText(
         `${M.compact ? "FOMC" : "Next FOMC"} ${formatDay(fomc.date)}`
       );
