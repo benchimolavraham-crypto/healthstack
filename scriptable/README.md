@@ -5,16 +5,26 @@ small (2x2) Home Screen widget — each rate in white, with the day's move
 stacked underneath it in red when it rose and green when it fell.
 
 ```
-Sep 15  Updated 7:46 AM
-5-Year           4.83%
-           ▼ 12 bp · 1D
-7-Year           4.91%
-            ▲ 3 bp · 1D
-10-Year          4.72%
-           ▲ 12 bp · 1D
-SOFR Sep 12      3.64%
-             flat · 1D
+MARKET  Updated 11:38 AM
+5-Year          4.981%
+          ▲ 15 bp · 1D
+7-Year           4.89%
+         ▲ 0.7 bp · 1D
+10-Year         5.108%
+          ▲ 15 bp · 1D
+SOFR             3.64%
+            ▲ 1 bp · 1D
+FOMC Oct 28        23d
 ```
+
+The bottom row is the next Fed rate decision — the thing that moves all four of
+these numbers — with the days until it. It turns amber inside the final week.
+The schedule is held in `FOMC_DECISION_DAYS` near the top of the script, through
+the end of 2027, since the Fed publishes it more than a year ahead and there is
+no clean feed to fetch. Each date is the *second* day of the two-day meeting,
+when the decision is announced at 2pm New York time. When the list runs out the
+row hides itself rather than showing a wrong date; extend it when 2028 is
+published.
 
 Rising rates are the red ones: the default is a borrower's view, where a higher
 rate costs money. Flip `UP_IS_BAD` to `false` for the opposite. The arrow
@@ -234,6 +244,7 @@ All at the top of `MarketRates.js`:
   `"pct"` shows the same move as `▲ 0.12%`.
 - `CHANGE_PERIOD` — `"1d"`, `"1w"` or `"1m"` (see above).
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
+- `SHOW_FOMC` — `false` hides the next-rate-decision row.
 - `LIVE_QUOTES` — `false` shows only the official daily closes, no intraday
   layer.
 - `WIDGET_FETCH` — `false` keeps all network work out of the widget (see

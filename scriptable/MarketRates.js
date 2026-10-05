@@ -65,6 +65,9 @@ const CONFIG = {
   // per hour rather than one per draw, which is what got it deprioritised.
   WIDGET_STALE_HOURS: 1,
 
+  // Show the next Fed rate decision under the rates.
+  SHOW_FOMC: true,
+
   // Treasuries trade continuously, so the official daily close is hours stale
   // for most of the day. This layers the live intraday yield on top of it.
   // Set false to show only the official closes.
@@ -89,6 +92,20 @@ const SERIES = [
 ];
 
 const TREASURY_IDS = ["DGS5", "DGS7", "DGS10"];
+
+// The rate decision lands at 2pm New York time on the SECOND day of each
+// two-day FOMC meeting, so these are the second days. The Fed publishes the
+// schedule more than a year ahead and there is no clean feed for it, so it is
+// held here rather than fetched — nothing to break, nothing to parse.
+// Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
+// EXTEND THIS when the Fed publishes 2028. The row hides itself once the list
+// runs out rather than showing a wrong date.
+const FOMC_DECISION_DAYS = [
+  "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+  "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+  "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09",
+  "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
+];
 
 const COLORS = {
   text: Color.dynamic(new Color("#000000"), new Color("#FFFFFF")),
@@ -696,12 +713,12 @@ function metrics(family) {
   // Every size has the same height to work with — only the width changes — so
   // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    return { padT: 8, padX: 11, padB: 8, header: 0, date: 11.5, label: 11, value: 16, change: 8.5, compact: true };
+    return { padT: 7, padX: 11, padB: 7, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 16, padX: 18, padB: 16, header: 12, date: 12, label: 15, value: 22, change: 11 };
+    return { padT: 16, padX: 18, padB: 16, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
   }
-  return { padT: 8, padX: 14, padB: 8, header: 10.5, date: 10.5, label: 13, value: 18, change: 9 };
+  return { padT: 8, padX: 14, padB: 8, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
 }
 
 function formatDay(ts) {
@@ -741,6 +758,23 @@ function moveText(rate, bp, label) {
   // point up to a whole one is the kind of overstatement this is meant to avoid.
   const shown = size < 1 ? size.toFixed(1) : String(Math.round(size));
   return `${arrow} ${shown} bp · ${label}`;
+}
+
+// The next scheduled rate decision, and how far off it is. Null once the
+// hardcoded schedule runs out, which hides the row rather than guessing.
+function nextFomc() {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  for (const iso of FOMC_DECISION_DAYS) {
+    const day = parseDateLoose(iso);
+    if (day && day.getTime() >= today) {
+      return {
+        date: day.getTime(),
+        days: Math.round((day.getTime() - today) / (24 * 60 * 60 * 1000)),
+      };
+    }
+  }
+  return null;
 }
 
 // The newest observation date across the four rates — the widget's "as of".
@@ -861,6 +895,30 @@ function buildWidget(rates, meta) {
   for (const series of SERIES) {
     widget.addSpacer();
     addRow(widget, series, rates[series.id], M, headline);
+  }
+
+  // The decision that moves all four of these numbers, and the countdown to it.
+  if (CONFIG.SHOW_FOMC) {
+    const fomc = nextFomc();
+    if (fomc) {
+      widget.addSpacer();
+      const row = widget.addStack();
+      row.layoutHorizontally();
+      row.centerAlignContent();
+      const label = row.addText(
+        `${M.compact ? "FOMC" : "Next FOMC"} ${formatDay(fomc.date)}`
+      );
+      label.font = Font.mediumSystemFont(M.fomc);
+      label.textColor = COLORS.dim;
+      label.lineLimit = 1;
+      label.minimumScaleFactor = 0.7;
+      row.addSpacer();
+      const away = row.addText(fomc.days === 0 ? "today" : `${fomc.days}d`);
+      away.font = Font.regularSystemFont(M.fomc);
+      // Inside a week it is close enough to be worth noticing.
+      away.textColor = fomc.days <= 7 ? COLORS.warn : COLORS.faint;
+      away.lineLimit = 1;
+    }
   }
 
   widget.refreshAfterDate = new Date(
