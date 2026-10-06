@@ -713,12 +713,15 @@ function metrics(family) {
   // Every size has the same height to work with — only the width changes — so
   // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    return { padT: 12, padX: 11, padB: 12, cornerInset: 4, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
+    // 16pt top and bottom is Apple's standard widget margin. The rate rows sit
+    // on flexible spacers, which had far more slack between them than the
+    // edges needed, so the margin comes out of those gaps.
+    return { padT: 16, padX: 11, padB: 16, cornerInset: 6, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 16, padX: 18, padB: 16, cornerInset: 2, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
+    return { padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
   }
-  return { padT: 12, padX: 14, padB: 12, cornerInset: 3, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
+  return { padT: 16, padX: 14, padB: 16, cornerInset: 5, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
 }
 
 function formatDay(ts) {
