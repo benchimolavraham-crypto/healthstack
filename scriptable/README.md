@@ -245,6 +245,7 @@ All at the top of `MarketRates.js`:
 - `CHANGE_PERIOD` — `"1d"`, `"1w"` or `"1m"` (see above).
 - `REFRESH` — `"auto"` for the schedule above, or a number of minutes.
 - `SHOW_FOMC` — `false` hides the next-rate-decision row.
+- `FOMC_SHADE` — colour of the meeting date: `"bright"`, `"blue"` or `"gold"`.
 - `LIVE_QUOTES` — `false` shows only the official daily closes, no intraday
   layer.
 - `WIDGET_FETCH` — `false` keeps all network work out of the widget (see

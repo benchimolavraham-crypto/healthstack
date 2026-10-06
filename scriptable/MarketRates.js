@@ -68,6 +68,9 @@ const CONFIG = {
   // Show the next Fed rate decision under the rates.
   SHOW_FOMC: true,
 
+  // Colour of the meeting date: "bright", "blue" or "gold".
+  FOMC_SHADE: "bright",
+
   // Treasuries trade continuously, so the official daily close is hours stale
   // for most of the day. This layers the live intraday yield on top of it.
   // Set false to show only the official closes.
@@ -115,6 +118,19 @@ const COLORS = {
   bad: Color.dynamic(new Color("#C0392B"), new Color("#F87171")),
   warn: Color.dynamic(new Color("#B45309"), new Color("#FBBF24")),
 };
+
+// Meeting date and countdown colours for each FOMC_SHADE, dark-mode first.
+const FOMC_SHADES = {
+  bright: { date: ["#111827", "#F2F3F5"], days: ["#4B5563", "#A0A4AD"] },
+  blue: { date: ["#1D4ED8", "#7EB6FF"], days: ["#3B5B92", "#6E8FBF"] },
+  gold: { date: ["#92400E", "#F2C46D"], days: ["#8A6A2F", "#B8975A"] },
+};
+
+function fomcColors() {
+  const shade = FOMC_SHADES[String(CONFIG.FOMC_SHADE || "bright").toLowerCase()] || FOMC_SHADES.bright;
+  const pick = (pair) => Color.dynamic(new Color(pair[0]), new Color(pair[1]));
+  return { date: pick(shade.date), days: pick(shade.days) };
+}
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -709,22 +725,44 @@ function recordRun(outcome) {
 // Widget
 // ---------------------------------------------------------------------------
 
+// The side of a small widget on this phone, from the screen it runs on. Every
+// size below is designed for 152pt and scaled to this, so a Pro Max's 170pt
+// widget gets 12% larger type instead of 18pt of empty gaps.
+function widgetSide() {
+  try {
+    const screen = Device.screenSize();
+    const w = Math.min(screen.width, screen.height);
+    const h = Math.max(screen.width, screen.height);
+    if (w >= 428) return 170;
+    if (w >= 414) return h >= 896 ? 169 : 159;
+    if (w >= 402) return 162;
+    if (w >= 390) return 158;
+    if (w >= 375) return h >= 812 ? 155 : 148;
+    if (w >= 360) return 155;
+    return 141;
+  } catch (e) {
+    return 158;
+  }
+}
+
 function metrics(family) {
-  // Every size has the same height to work with — only the width changes — so
-  // the type scales stay close and the flexible spacers absorb the difference.
+  const k = widgetSide() / 152;
+  const scale = (m) => {
+    const out = {};
+    for (const key of Object.keys(m)) out[key] = typeof m[key] === "number" ? m[key] * k : m[key];
+    return out;
+  };
   if (family === "small") {
-    // Measured in a rendered mock of a 152pt widget with line height pinned to
-    // SF Pro's 1.19em: 8pt to spare vertically, 11pt horizontally, 5pt between
-    // the header's two items. A row's height is set by the name and change
-    // stacked on the left, not by the figure, so the figure can be the largest
-    // thing here without costing height. An overrun is what pushes the top and
-    // bottom rows into the corners however much padding is set.
-    return { padT: 11, padX: 10, padB: 11, cornerInset: 6, header: 0, date: 10, stamp: 8.5, label: 12, value: 20, change: 8, fomc: 9, compact: true };
+    // Measured in a rendered mock at 152pt with line height pinned to SF Pro's
+    // 1.19em: fits with 1.5pt to spare, and real line heights run a little
+    // tighter than that. The layout is ten lines of type in a square, so
+    // anything larger has to come out of something else.
+    return scale({ padT: 9, padX: 11, padB: 9, cornerInset: 6, header: 0, date: 10.5, stamp: 8, label: 10.5, value: 15, change: 7.5, fomcLabel: 9, fomcDate: 11, fomcDays: 9.5, compact: true });
   }
   if (family === "large") {
-    return { padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 17, value: 28, change: 11, fomc: 12 };
+    return scale({ padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 15, value: 22, change: 11, fomcLabel: 11, fomcDate: 14, fomcDays: 12 });
   }
-  return { padT: 11, padX: 14, padB: 11, cornerInset: 5, header: 10.5, date: 10.5, stamp: 9, label: 12.5, value: 21, change: 8, fomc: 10 };
+  return scale({ padT: 9, padX: 14, padB: 9, cornerInset: 5, header: 10.5, date: 10.5, stamp: 8.5, label: 13, value: 17, change: 8, fomcLabel: 9.5, fomcDate: 11, fomcDays: 10 });
 }
 
 function formatDay(ts) {
@@ -798,49 +836,44 @@ function addRow(widget, series, rate, M, headline) {
   row.layoutHorizontally();
   row.centerAlignContent();
 
-  // The name with the day's move under it on the left, the figure on the right.
-  // Stacking the move under the name rather than under the figure makes each
-  // row only as tall as the figure, which is what leaves room to make it large.
-  const left = row.addStack();
-  left.layoutVertically();
-  left.spacing = 1;
-
-  const nameLine = left.addStack();
-  nameLine.layoutHorizontally();
-  nameLine.bottomAlignContent();
-  const label = nameLine.addText(M.compact ? series.short : series.label);
-  label.font = Font.mediumSystemFont(M.label);
+  const label = row.addText(M.compact ? series.short : series.label);
+  label.font = Font.regularSystemFont(M.label);
   label.textColor = COLORS.dim;
   label.lineLimit = 1;
-  label.minimumScaleFactor = 0.8;
+  label.minimumScaleFactor = 0.7;
 
   if (rate && headline && formatDay(rate.date) !== formatDay(headline)) {
-    nameLine.addSpacer(4);
-    const own = nameLine.addText(formatDay(rate.date));
+    row.addSpacer(4);
+    const own = row.addText(formatDay(rate.date));
     own.font = Font.regularSystemFont(M.change);
     own.textColor = COLORS.faint;
     own.lineLimit = 1;
   }
 
-  if (CONFIG.SHOW_CHANGE) {
-    const basis = changeBasis(rate);
-    const bp = rate && basis.ref !== null ? (rate.value - basis.ref) * 100 : null;
-    const move = left.addText(moveText(rate, bp, basis.label));
-    move.font = Font.mediumSystemFont(M.change);
-    move.textColor = changeColor(bp);
-    move.lineLimit = 1;
-    move.minimumScaleFactor = 0.8;
-  }
-
   row.addSpacer();
 
-  const value = row.addText(
+  // The figure with the day's move stacked under it.
+  const figures = row.addStack();
+  figures.layoutVertically();
+  figures.spacing = 0;
+
+  const value = figures.addText(
     rate ? `${rate.value.toFixed(rate.live ? 3 : 2)}%` : "—"
   );
   value.font = Font.boldRoundedSystemFont(M.value);
   value.textColor = COLORS.text;
   value.lineLimit = 1;
-  value.minimumScaleFactor = 0.85;
+  value.rightAlignText();
+
+  if (CONFIG.SHOW_CHANGE) {
+    const basis = changeBasis(rate);
+    const bp = rate && basis.ref !== null ? (rate.value - basis.ref) * 100 : null;
+    const move = figures.addText(moveText(rate, bp, basis.label));
+    move.font = Font.mediumSystemFont(M.change);
+    move.textColor = changeColor(bp);
+    move.lineLimit = 1;
+    move.rightAlignText();
+  }
 }
 
 function buildWidget(rates, meta) {
@@ -921,18 +954,24 @@ function buildWidget(rates, meta) {
       row.centerAlignContent();
       // Same corner clearance as the top row.
       row.setPadding(0, M.cornerInset, 0, M.cornerInset);
-      const label = row.addText(
-        `${M.compact ? "FOMC" : "Next FOMC"} ${formatDay(fomc.date)}`
-      );
-      label.font = Font.mediumSystemFont(M.fomc);
+      row.bottomAlignContent();
+      const shade = fomcColors();
+      const label = row.addText(M.compact ? "FOMC" : "NEXT FOMC");
+      label.font = Font.semiboldSystemFont(M.fomcLabel);
       label.textColor = COLORS.dim;
       label.lineLimit = 1;
-      label.minimumScaleFactor = 0.7;
+      row.addSpacer(5 * (M.fomcDate / 11));
+      // The date is the part worth reading at a glance, so it is the large one.
+      const date = row.addText(formatDay(fomc.date));
+      date.font = Font.semiboldSystemFont(M.fomcDate);
+      date.textColor = shade.date;
+      date.lineLimit = 1;
+      date.minimumScaleFactor = 0.8;
       row.addSpacer();
       const away = row.addText(fomc.days === 0 ? "today" : `${fomc.days}d`);
-      away.font = Font.regularSystemFont(M.fomc);
+      away.font = Font.mediumSystemFont(M.fomcDays);
       // Inside a week it is close enough to be worth noticing.
-      away.textColor = fomc.days <= 7 ? COLORS.warn : COLORS.faint;
+      away.textColor = fomc.days <= 7 ? COLORS.warn : shade.days;
       away.lineLimit = 1;
     }
   }
