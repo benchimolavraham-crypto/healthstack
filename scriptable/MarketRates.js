@@ -69,7 +69,7 @@ const CONFIG = {
   SHOW_FOMC: true,
 
   // Colour of the meeting date: "bright", "blue" or "gold".
-  FOMC_SHADE: "bright",
+  FOMC_SHADE: "blue",
 
   // Treasuries trade continuously, so the official daily close is hours stale
   // for most of the day. This layers the live intraday yield on top of it.
@@ -119,7 +119,7 @@ const COLORS = {
   warn: Color.dynamic(new Color("#B45309"), new Color("#FBBF24")),
 };
 
-// Meeting date and countdown colours for each FOMC_SHADE, dark-mode first.
+// Meeting date and countdown colours for each FOMC_SHADE, as [light, dark].
 const FOMC_SHADES = {
   bright: { date: ["#111827", "#F2F3F5"], days: ["#4B5563", "#A0A4AD"] },
   blue: { date: ["#1D4ED8", "#7EB6FF"], days: ["#3B5B92", "#6E8FBF"] },
