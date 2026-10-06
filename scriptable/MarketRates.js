@@ -753,16 +753,32 @@ function metrics(family) {
     return out;
   };
   if (family === "small") {
-    // Measured in a rendered mock at 152pt with line height pinned to SF Pro's
-    // 1.19em: fits with 1.5pt to spare, and real line heights run a little
-    // tighter than that. The layout is ten lines of type in a square, so
-    // anything larger has to come out of something else.
-    return scale({ padT: 9, padX: 11, padB: 9, cornerInset: 6, header: 0, date: 10.5, stamp: 8, label: 10.5, value: 15, change: 7.5, fomcLabel: 9, fomcDate: 11, fomcDays: 9.5, compact: true });
+    // Ten lines of type in a square. Row height is (figure + change) x 1.19,
+    // which matched the phone to 0.1pt; the gaps between rows are computed from
+    // whatever height these leave (see rowGap), so nothing here can overflow.
+    return scale({ padT: 8, padX: 11, padB: 8, cornerInset: 6, header: 0, date: 9.5, stamp: 7.5, label: 10.5, value: 14.5, change: 7, fomcLabel: 8.5, fomcDate: 10.5, fomcDays: 9, compact: true });
   }
   if (family === "large") {
-    return scale({ padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 15, value: 22, change: 11, fomcLabel: 11, fomcDate: 14, fomcDays: 12 });
+    return scale({ padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 15, value: 22, change: 11, fomcLabel: 11, fomcDate: 14, fomcDays: 12, tall: true });
   }
-  return scale({ padT: 9, padX: 14, padB: 9, cornerInset: 5, header: 10.5, date: 10.5, stamp: 8.5, label: 13, value: 17, change: 8, fomcLabel: 9.5, fomcDate: 11, fomcDays: 10 });
+  return scale({ padT: 8, padX: 14, padB: 8, cornerInset: 5, header: 10, date: 9.5, stamp: 8, label: 12, value: 14.5, change: 7, fomcLabel: 8.5, fomcDate: 10.5, fomcDays: 9 });
+}
+
+// The gap between rows, computed rather than left to flexible spacers. A
+// flexible spacer in a widget cannot shrink below the system's ~8pt, and five
+// of them came to 40pt this layout never had: the content overran the widget
+// and the top and bottom rows were pushed off its edges, whatever the padding.
+// Fixed gaps sized to the leftover height cannot overrun it.
+function rowGap(M) {
+  const line = (pt) => pt * 1.19; // SF Pro's line height, matched on the phone
+  const height = widgetSide() * (M.tall ? 2.24 : 1);
+  const content =
+    line(Math.max(M.header || 0, M.date, M.stamp)) +
+    SERIES.length * line(M.value + M.change) +
+    (CONFIG.SHOW_FOMC ? line(Math.max(M.fomcLabel, M.fomcDate, M.fomcDays)) : 0);
+  const gaps = SERIES.length + (CONFIG.SHOW_FOMC ? 1 : 0);
+  // 2pt held back for rounding in the line-height estimate.
+  return Math.max(1, (height - M.padT - M.padB - content - 2) / gaps);
 }
 
 function formatDay(ts) {
@@ -937,10 +953,10 @@ function buildWidget(rates, meta) {
   checked.lineLimit = 1;
   checked.minimumScaleFactor = 0.7;
 
-  // Flexible spacers spread the rows over whatever height is left, and
-  // collapse to nothing on the shortest devices rather than clipping a row.
+  // Fixed gaps, never flexible spacers: see rowGap.
+  const gap = rowGap(M);
   for (const series of SERIES) {
-    widget.addSpacer();
+    widget.addSpacer(gap);
     addRow(widget, series, rates[series.id], M, headline);
   }
 
@@ -948,7 +964,7 @@ function buildWidget(rates, meta) {
   if (CONFIG.SHOW_FOMC) {
     const fomc = nextFomc();
     if (fomc) {
-      widget.addSpacer();
+      widget.addSpacer(gap);
       const row = widget.addStack();
       row.layoutHorizontally();
       row.centerAlignContent();
