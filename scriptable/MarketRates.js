@@ -713,15 +713,16 @@ function metrics(family) {
   // Every size has the same height to work with — only the width changes — so
   // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    // 16pt top and bottom is Apple's standard widget margin. The rate rows sit
-    // on flexible spacers, which had far more slack between them than the
-    // edges needed, so the margin comes out of those gaps.
-    return { padT: 16, padX: 11, padB: 16, cornerInset: 6, header: 0, date: 11, label: 10.5, value: 15, change: 8, fomc: 8.5, compact: true };
+    // Sized against a height budget for a ~152pt widget (line height ~1.2x the
+    // point size): fits with ~4pt to spare. Bigger than this overruns it, and an
+    // overrun is what pushes the top and bottom rows into the corners however
+    // much padding is set.
+    return { padT: 11, padX: 10, padB: 11, cornerInset: 6, header: 0, date: 11, stamp: 9, label: 12.5, value: 19, change: 8.5, fomc: 9.5, compact: true };
   }
   if (family === "large") {
-    return { padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, label: 15, value: 22, change: 11, fomc: 11 };
+    return { padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 17, value: 28, change: 11, fomc: 12 };
   }
-  return { padT: 16, padX: 14, padB: 16, cornerInset: 5, header: 10.5, date: 10.5, label: 13, value: 18, change: 9, fomc: 9 };
+  return { padT: 11, padX: 14, padB: 11, cornerInset: 5, header: 10.5, date: 10.5, stamp: 9, label: 13, value: 20, change: 8.5, fomc: 10 };
 }
 
 function formatDay(ts) {
@@ -795,43 +796,49 @@ function addRow(widget, series, rate, M, headline) {
   row.layoutHorizontally();
   row.centerAlignContent();
 
-  const label = row.addText(M.compact ? series.short : series.label);
-  label.font = Font.regularSystemFont(M.label);
+  // The name with the day's move under it on the left, the figure on the right.
+  // Stacking the move under the name rather than under the figure makes each
+  // row only as tall as the figure, which is what leaves room to make it large.
+  const left = row.addStack();
+  left.layoutVertically();
+  left.spacing = 1;
+
+  const nameLine = left.addStack();
+  nameLine.layoutHorizontally();
+  nameLine.bottomAlignContent();
+  const label = nameLine.addText(M.compact ? series.short : series.label);
+  label.font = Font.mediumSystemFont(M.label);
   label.textColor = COLORS.dim;
   label.lineLimit = 1;
-  label.minimumScaleFactor = 0.7;
+  label.minimumScaleFactor = 0.8;
 
   if (rate && headline && formatDay(rate.date) !== formatDay(headline)) {
-    row.addSpacer(4);
-    const own = row.addText(formatDay(rate.date));
+    nameLine.addSpacer(4);
+    const own = nameLine.addText(formatDay(rate.date));
     own.font = Font.regularSystemFont(M.change);
     own.textColor = COLORS.faint;
     own.lineLimit = 1;
   }
 
+  if (CONFIG.SHOW_CHANGE) {
+    const basis = changeBasis(rate);
+    const bp = rate && basis.ref !== null ? (rate.value - basis.ref) * 100 : null;
+    const move = left.addText(moveText(rate, bp, basis.label));
+    move.font = Font.mediumSystemFont(M.change);
+    move.textColor = changeColor(bp);
+    move.lineLimit = 1;
+    move.minimumScaleFactor = 0.8;
+  }
+
   row.addSpacer();
 
-  const figures = row.addStack();
-  figures.layoutVertically();
-  figures.spacing = 0;
-
-  const value = figures.addText(
+  const value = row.addText(
     rate ? `${rate.value.toFixed(rate.live ? 3 : 2)}%` : "—"
   );
   value.font = Font.boldRoundedSystemFont(M.value);
   value.textColor = COLORS.text;
   value.lineLimit = 1;
-  value.rightAlignText();
-
-  if (CONFIG.SHOW_CHANGE) {
-    const basis = changeBasis(rate);
-    const bp = rate && basis.ref !== null ? (rate.value - basis.ref) * 100 : null;
-    const move = figures.addText(moveText(rate, bp, basis.label));
-    move.font = Font.mediumSystemFont(M.change);
-    move.textColor = changeColor(bp);
-    move.lineLimit = 1;
-    move.rightAlignText();
-  }
+  value.minimumScaleFactor = 0.85;
 }
 
 function buildWidget(rates, meta) {
@@ -890,7 +897,7 @@ function buildWidget(rates, meta) {
   head.addSpacer();
   // Labelled, so it cannot be mistaken for the clock in the status bar.
   const checked = head.addText(`Updated ${formatClock(meta.refreshedAt)}`);
-  checked.font = Font.regularSystemFont(M.change);
+  checked.font = Font.regularSystemFont(M.stamp);
   checked.textColor = COLORS.faint;
   checked.lineLimit = 1;
   checked.minimumScaleFactor = 0.7;
