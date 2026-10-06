@@ -713,16 +713,18 @@ function metrics(family) {
   // Every size has the same height to work with — only the width changes — so
   // the type scales stay close and the flexible spacers absorb the difference.
   if (family === "small") {
-    // Sized against a height budget for a ~152pt widget (line height ~1.2x the
-    // point size): fits with ~4pt to spare. Bigger than this overruns it, and an
-    // overrun is what pushes the top and bottom rows into the corners however
-    // much padding is set.
-    return { padT: 11, padX: 10, padB: 11, cornerInset: 6, header: 0, date: 11, stamp: 9, label: 12.5, value: 19, change: 8.5, fomc: 9.5, compact: true };
+    // Measured in a rendered mock of a 152pt widget with line height pinned to
+    // SF Pro's 1.19em: 8pt to spare vertically, 11pt horizontally, 5pt between
+    // the header's two items. A row's height is set by the name and change
+    // stacked on the left, not by the figure, so the figure can be the largest
+    // thing here without costing height. An overrun is what pushes the top and
+    // bottom rows into the corners however much padding is set.
+    return { padT: 11, padX: 10, padB: 11, cornerInset: 6, header: 0, date: 10, stamp: 8.5, label: 12, value: 20, change: 8, fomc: 9, compact: true };
   }
   if (family === "large") {
     return { padT: 16, padX: 18, padB: 16, cornerInset: 4, header: 12, date: 12, stamp: 11, label: 17, value: 28, change: 11, fomc: 12 };
   }
-  return { padT: 11, padX: 14, padB: 11, cornerInset: 5, header: 10.5, date: 10.5, stamp: 9, label: 13, value: 20, change: 8.5, fomc: 10 };
+  return { padT: 11, padX: 14, padB: 11, cornerInset: 5, header: 10.5, date: 10.5, stamp: 9, label: 12.5, value: 21, change: 8, fomc: 10 };
 }
 
 function formatDay(ts) {
